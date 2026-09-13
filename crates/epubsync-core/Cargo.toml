@@ -1,0 +1,15 @@
+[package]
+name = "epubsync-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Library, metadata, and Kobo sync for EpubSync"
+links = "kepubshim"
+
+[dependencies]
+anyhow = "1.0.104"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
