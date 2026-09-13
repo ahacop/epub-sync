@@ -41,8 +41,8 @@ fn raw(root: &Path) -> rusqlite::Connection {
 fn insert_content(root: &Path, volume_id: &str, title: &str, attribution: &str, size: i64) {
     raw(root)
         .execute(
-            "INSERT INTO content (ContentID, ContentType, Title, Attribution, ___FileSize, ___PercentRead, ReadStatus, DateLastRead, IsDownloaded)
-             VALUES (?1, '6', ?2, ?3, ?4, 37, 1, '2026-09-01T10:00:00Z', 'true')",
+            "INSERT INTO content (ContentID, ContentType, MimeType, ___UserID, Title, Attribution, ___FileSize, ___PercentRead, ReadStatus, DateLastRead, IsDownloaded)
+             VALUES (?1, '6', 'application/x-kobo-epub+zip', '', ?2, ?3, ?4, 37, 1, '2026-09-01T10:00:00Z', 'true')",
             rusqlite::params![volume_id, title, attribution, size],
         )
         .unwrap();

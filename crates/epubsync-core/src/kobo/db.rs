@@ -16,7 +16,7 @@ use crate::metadata::{Metadata, format_series_number};
 
 /// The `dbversion` values the app has been run against on a real Kobo.
 /// Add a value after the device checks in the implementation plan pass.
-pub const TESTED_VERSIONS: &[i64] = &[];
+pub const TESTED_VERSIONS: &[i64] = &[174];
 
 pub const DB_PATH: &str = ".kobo/KoboReader.sqlite";
 
