@@ -221,3 +221,30 @@ fn owned_ranges_do_not_overlap_in_any_fixture() {
         assert!(opf.title.is_some(), "{name}: no title");
     }
 }
+
+#[test]
+fn accepts_a_doctype_in_the_container_and_the_opf() {
+    // Some Pearson EPUBs put an XHTML DOCTYPE on their container.xml.
+    let container = common::CONTAINER_XML.replacen(
+        "?>\n",
+        "?>\n<!DOCTYPE container PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n",
+        1,
+    );
+    assert_eq!(opf::rootfile_path(&container).unwrap(), common::OPF_PATH);
+
+    let with_doctype = common::EPUB2_OPF.replacen(
+        "?>\n",
+        "?>\n<!DOCTYPE package PUBLIC \"+//ISBN 0-9673008-1-9//DTD OEB 1.2 Package//EN\" \"http://openebook.org/dtds/oeb-1.2/oebpkg12.dtd\">\n",
+        1,
+    );
+    let opf = parse(&with_doctype);
+    assert_eq!(
+        opf.title.as_ref().unwrap().value,
+        "The Left Hand of Darkness"
+    );
+    assert_slice(
+        &opf,
+        opf.title.as_ref().unwrap(),
+        "<dc:title>The Left Hand of Darkness</dc:title>",
+    );
+}

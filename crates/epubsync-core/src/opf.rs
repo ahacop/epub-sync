@@ -10,7 +10,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use roxmltree::{Document, Node};
+use roxmltree::{Document, Node, ParsingOptions};
 
 pub const NS_OPF: &str = "http://www.idpf.org/2007/opf";
 pub const NS_DC: &str = "http://purl.org/dc/elements/1.1/";
@@ -136,9 +136,21 @@ fn read_entry<R: Read + std::io::Seek>(
     Ok(text)
 }
 
+/// Parses an XML document that may start with a DOCTYPE. Some publishers put
+/// a DOCTYPE line in `container.xml` and the OPF. roxmltree rejects DOCTYPEs
+/// unless told otherwise, and the entity expansion it guards against is not
+/// a concern for files the user places in their own library.
+fn parse_xml(text: &str) -> Result<Document<'_>> {
+    let options = ParsingOptions {
+        allow_dtd: true,
+        ..ParsingOptions::default()
+    };
+    Ok(Document::parse_with_options(text, options)?)
+}
+
 /// Returns the `full-path` of the first `rootfile` in `container.xml`.
 pub fn rootfile_path(container: &str) -> Result<String> {
-    let doc = Document::parse(container).context("parse META-INF/container.xml")?;
+    let doc = parse_xml(container).context("parse META-INF/container.xml")?;
     doc.descendants()
         .find(|n| {
             n.is_element()
@@ -153,7 +165,7 @@ pub fn rootfile_path(container: &str) -> Result<String> {
 /// Parses OPF text. `path` is the OPF path inside the zip and is used to
 /// resolve the cover path.
 pub fn parse(path: &str, text: String) -> Result<Opf> {
-    let doc = Document::parse(&text).context("parse the OPF")?;
+    let doc = parse_xml(&text).context("parse the OPF")?;
     let package = doc.root_element();
     if package.tag_name().name() != "package" {
         bail!(
