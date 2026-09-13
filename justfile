@@ -13,6 +13,11 @@ release version:
     version="{{version}}"
     tap="{{TAP}}"
 
+    # cargo comes from the Nix dev shell. Outside it, run the recipe inside.
+    if ! command -v cargo >/dev/null; then
+        exec nix develop --command just TAP="$tap" release "$version"
+    fi
+
     [ "$(git branch --show-current)" = main ] || { echo "not on main"; exit 1; }
     [ -z "$(git status --porcelain)" ] || { echo "the tree is not clean"; exit 1; }
     [ -d "$tap/Formula" ] || { echo "no tap checkout at $tap"; exit 1; }
