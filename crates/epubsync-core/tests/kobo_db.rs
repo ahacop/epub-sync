@@ -163,7 +163,7 @@ fn update_metadata_writes_the_columns_that_differ() {
 }
 
 #[test]
-fn update_file_size_and_delete_stale_row() {
+fn update_file_size() {
     let dir = tempfile::tempdir().unwrap();
     let root = fake_kobo(dir.path(), "N1", UNTESTED);
     let db = open_db(&root);
@@ -171,17 +171,6 @@ fn update_file_size_and_delete_stale_row() {
     insert_content(&root, VOLUME_1, "T", "A", 1000);
     assert!(db.update_file_size(VOLUME_1, 2000).unwrap());
     assert_eq!(db.find_content(VOLUME_1).unwrap().unwrap().file_size, 2000);
-
-    // A downloaded row is not stale.
-    assert!(!db.delete_stale_row(VOLUME_1).unwrap());
-    raw(&root)
-        .execute(
-            "UPDATE content SET IsDownloaded = 'false', Accessibility = 1 WHERE ContentID = ?1",
-            [VOLUME_1],
-        )
-        .unwrap();
-    assert!(db.delete_stale_row(VOLUME_1).unwrap());
-    assert!(db.find_content(VOLUME_1).unwrap().is_none());
 }
 
 #[test]
@@ -265,7 +254,7 @@ fn reads_words_once_and_keeps_store_book_titles() {
 }
 
 #[test]
-fn apply_updates_the_file_size_on_replace_and_drops_the_stale_row_on_send_again() {
+fn apply_updates_the_file_size_on_replace_and_sends_again_after_a_device_delete() {
     let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("EPUBSYNC_CONFIG", dir.path().join("config.toml")) };
@@ -308,19 +297,16 @@ fn apply_updates_the_file_size_on_replace_and_drops_the_stale_row_on_send_again(
         size
     );
 
-    // Delete on the device with a stale row left behind: send again drops it.
+    // Deleted on the device: the firmware drops the row itself, and the
+    // next sync sends the book again.
     std::fs::remove_file(kobo.book_path(id)).unwrap();
     raw(&root)
-        .execute(
-            "UPDATE content SET IsDownloaded = 'false' WHERE ContentID = ?1",
-            [VOLUME_1],
-        )
+        .execute("DELETE FROM content WHERE ContentID = ?1", [VOLUME_1])
         .unwrap();
     let actions = sync::plan(&lib, &kobo).unwrap();
     assert_eq!(actions, vec![Action::SendAgain { id, revision: 2 }]);
     sync::apply(&mut lib, &mut kobo, &actions, |_| {}).unwrap();
     assert!(kobo.book_path(id).exists());
-    assert!(open_db(&root).find_content(VOLUME_1).unwrap().is_none());
 
     // With the gate up, a replace leaves the row alone.
     kobo.open_db(false).unwrap();

@@ -79,16 +79,6 @@ impl KoboDb {
         Ok(n > 0)
     }
 
-    /// Deletes the row the firmware can leave behind after a book is
-    /// deleted on the device. Returns true when a row was deleted.
-    pub fn delete_stale_row(&self, volume_id: &str) -> Result<bool> {
-        let n = self.conn.execute(
-            "DELETE FROM content WHERE ContentID = ?1 AND Accessibility = 1 AND IsDownloaded IN ('false', 0)",
-            [volume_id],
-        )?;
-        Ok(n > 0)
-    }
-
     /// The percent read, the read status, and the last read time for a
     /// book path. `book_id` is copied into the result.
     pub fn progress(&self, volume_id: &str, book_id: i64) -> Result<Option<Progress>> {
