@@ -11,4 +11,13 @@ name = "epubsync"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
 epubsync-core = { path = "../epubsync-core" }
+tempfile = "3.27.0"
+toml = "1.1.6"
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

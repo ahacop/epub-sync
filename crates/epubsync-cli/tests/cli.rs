@@ -1,0 +1,199 @@
+//! Runs the binary against a temp library.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use assert_cmd::Command;
+use predicates::prelude::*;
+
+const OPF: &str = r##"<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="uuid_id" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:identifier id="uuid_id" opf:scheme="uuid">a1b2c3</dc:identifier>
+    <dc:title>The Left Hand of Darkness</dc:title>
+    <dc:creator opf:role="aut">Ursula K. Le Guin</dc:creator>
+    <dc:language>en</dc:language>
+    <meta name="calibre:series" content="Hainish Cycle"/>
+    <meta name="calibre:series_index" content="4"/>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>
+"##;
+
+fn write_epub(dir: &Path, name: &str, opf: &str) -> PathBuf {
+    use zip::CompressionMethod;
+    use zip::write::SimpleFileOptions;
+    let path = dir.join(name);
+    let file = std::fs::File::create(&path).unwrap();
+    let mut zw = zip::ZipWriter::new(file);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zw.start_file("mimetype", stored).unwrap();
+    zw.write_all(b"application/epub+zip").unwrap();
+    zw.start_file("META-INF/container.xml", deflated).unwrap();
+    zw.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+    zw.start_file("OEBPS/content.opf", deflated).unwrap();
+    zw.write_all(opf.as_bytes()).unwrap();
+    zw.start_file("OEBPS/chapter1.xhtml", deflated).unwrap();
+    zw.write_all(br#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>1</title></head><body><p>Hello.</p></body></html>"#).unwrap();
+    zw.finish().unwrap();
+    path
+}
+
+struct Env {
+    dir: tempfile::TempDir,
+}
+
+impl Env {
+    fn new() -> Env {
+        Env {
+            dir: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    fn cmd(&self) -> Command {
+        let mut cmd = Command::cargo_bin("epubsync").unwrap();
+        cmd.env("EPUBSYNC_CONFIG", self.dir.path().join("config.toml"));
+        cmd.env_remove("EDITOR");
+        cmd
+    }
+
+    fn init(&self) {
+        self.cmd()
+            .args(["init", self.dir.path().join("library").to_str().unwrap()])
+            .assert()
+            .success();
+    }
+}
+
+#[test]
+fn every_command_but_init_needs_the_config() {
+    let env = Env::new();
+    env.cmd()
+        .arg("list")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Run `epubsync init <folder>`"));
+}
+
+#[test]
+fn init_import_list_edit_remove() {
+    let env = Env::new();
+    env.init();
+    assert!(env.dir.path().join("library/library.sqlite").exists());
+
+    let epub = write_epub(env.dir.path(), "lhod.epub", OPF);
+    env.cmd()
+        .args(["import", epub.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("    1  The Left Hand of Darkness"))
+        .stdout(predicate::str::contains(
+            "made sort name for Ursula K. Le Guin: Le Guin, Ursula K.",
+        ));
+    assert!(env.dir.path().join("library/1.kepub.epub").exists());
+
+    env.cmd()
+        .args(["import", epub.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("already in the library, skipped"));
+
+    env.cmd()
+        .arg("list")
+        .assert()
+        .success()
+        .stdout("    1  The Left Hand of Darkness  by Ursula K. Le Guin  [Hainish Cycle #4]\n");
+
+    env.cmd()
+        .args([
+            "edit",
+            "1",
+            "--title",
+            "The Left Hand",
+            "--series-number",
+            "4.5",
+            "--author",
+            "Ursula K. Le Guin|Le Guin, Ursula",
+        ])
+        .assert()
+        .success()
+        .stdout("    1  The Left Hand  by Ursula K. Le Guin  [Hainish Cycle #4.5]\n");
+
+    env.cmd()
+        .args(["edit", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("set $EDITOR"));
+
+    env.cmd()
+        .args(["remove", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--yes"));
+    assert!(env.dir.path().join("library/1.kepub.epub").exists());
+
+    env.cmd()
+        .args(["remove", "1", "--yes"])
+        .assert()
+        .success()
+        .stdout("removed 1 \"The Left Hand\"\n");
+    assert!(!env.dir.path().join("library/1.kepub.epub").exists());
+    env.cmd().arg("list").assert().success().stdout("");
+}
+
+#[test]
+fn imports_a_folder() {
+    let env = Env::new();
+    env.init();
+    let books = env.dir.path().join("books");
+    std::fs::create_dir(&books).unwrap();
+    write_epub(&books, "a.epub", OPF);
+    write_epub(
+        &books,
+        "b.epub",
+        &OPF.replace("The Left Hand of Darkness", "The Dispossessed"),
+    );
+    std::fs::write(books.join("notes.txt"), "not a book").unwrap();
+    env.cmd()
+        .args(["import", books.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("    1  The Left Hand of Darkness"))
+        .stdout(predicate::str::contains("    2  The Dispossessed"));
+}
+
+#[test]
+fn edits_through_the_editor() {
+    let env = Env::new();
+    env.init();
+    let epub = write_epub(env.dir.path(), "lhod.epub", OPF);
+    env.cmd()
+        .args(["import", epub.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // An "editor" that rewrites the title with sed.
+    let editor = env.dir.path().join("editor.sh");
+    std::fs::write(
+        &editor,
+        "#!/bin/sh\nsed -i 's/The Left Hand of Darkness/Winter/' \"$1\"\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    env.cmd()
+        .env("EDITOR", editor.to_str().unwrap())
+        .args(["edit", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "    1  Winter  by Ursula K. Le Guin",
+        ));
+}

@@ -1,25 +1,30 @@
 //! The metadata record: the fields the library and the file both hold.
 
+use serde::{Deserialize, Serialize};
+
 use crate::opf::Opf;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Author {
     pub name: String,
     pub sort: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Series {
     pub name: String,
     pub number: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Metadata {
     pub title: String,
     pub authors: Vec<Author>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series: Option<Series>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
