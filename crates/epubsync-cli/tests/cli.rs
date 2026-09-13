@@ -245,7 +245,7 @@ fn syncs_to_a_folder_that_looks_like_a_kobo() {
         .stdout(predicate::str::contains("sending 1"))
         .stdout(predicate::str::contains("deleting 42"))
         .stdout(predicate::str::contains(
-            "not a mounted volume; nothing to eject",
+            "run `epubsync eject` before you unplug the device",
         ));
     assert!(kobo.join("EpubSync/1.kepub.epub").exists());
     assert!(!kobo.join("EpubSync/42.kepub.epub").exists());
@@ -334,4 +334,24 @@ fn lists_progress_and_words() {
         .success()
         .stdout(predicate::str::contains("serendipity"))
         .stdout(predicate::str::contains("ansible").not());
+}
+
+#[test]
+fn eject_skips_a_folder_that_is_not_a_volume() {
+    let env = Env::new();
+    env.init();
+    let kobo = env.dir.path().join("KOBOeReader");
+    std::fs::create_dir_all(kobo.join(".kobo")).unwrap();
+    std::fs::write(
+        kobo.join(".kobo/version"),
+        "N4181A,3.0.35,4.38.23171,3.0.35,3.0.35,0\n",
+    )
+    .unwrap();
+    env.cmd()
+        .args(["eject", "--device", kobo.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "not a mounted volume; nothing to eject",
+        ));
 }

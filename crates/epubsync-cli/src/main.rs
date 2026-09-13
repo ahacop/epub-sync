@@ -519,7 +519,8 @@ fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
         println!("{} new word(s)", back.words.len());
     }
     kobo.finish()?;
-    eject(&kobo)
+    println!("run `epubsync eject` before you unplug the device");
+    Ok(())
 }
 
 fn find_kobo(device: Option<&Path>) -> Result<Kobo> {

@@ -65,10 +65,12 @@ and says so. `--allow-newer-firmware` runs them anyway.
 
 ## Eject
 
-`sync` ends by ejecting the Kobo, and `epubsync eject` does it on its own.
-An eject is an unmount plus the SCSI eject that ends the USB session; after
-a plain unmount the Kobo keeps showing "connected". Pull the cable only
-after the eject, or the Kobo database can be left corrupt.
+`sync` leaves the Kobo mounted, so you can run more commands. When you are
+done, `epubsync eject` unmounts it and sends the SCSI eject that ends the
+USB session; after a plain unmount the Kobo keeps showing "connected".
+Pull the cable only after the eject, or the Kobo database can be left
+corrupt. After an eject the Kobo drops off the USB bus, and only a new
+plug-in brings it back.
 
 On Linux the eject goes through udisks2 over D-Bus, so udisks2 must be
 running, and polkit decides whether your session may unmount and eject. A
