@@ -1,0 +1,267 @@
+//! The viewer's colors, fonts, and widget styles.
+//!
+//! The window follows the system light or dark mode. The app does not pick
+//! a theme, so Iced picks its Light or Dark theme from the system, and every
+//! style function here reads `theme.extended_palette().is_dark` to choose
+//! between the two color sets. The `view` functions never see the mode: they
+//! pass a closure that takes the theme, and Iced calls it when it draws.
+
+use iced::font::Weight;
+use iced::widget::{button, container, progress_bar, text, text_input};
+use iced::{Background, Border, Color, Element, Fill, Font, Theme, border};
+
+/// The interface typeface.
+pub const SANS: Font = Font::with_name("Instrument Sans");
+/// The typeface for the book title and the description.
+pub const SERIF: Font = Font::with_name("Newsreader");
+/// The typeface for ids, serials, and paths.
+pub const MONO: Font = Font::with_name("JetBrains Mono");
+
+pub const SANS_MEDIUM: Font = Font {
+    weight: Weight::Medium,
+    ..SANS
+};
+pub const SANS_SEMIBOLD: Font = Font {
+    weight: Weight::Semibold,
+    ..SANS
+};
+pub const SERIF_MEDIUM: Font = Font {
+    weight: Weight::Medium,
+    ..SERIF
+};
+
+/// The text size of table cells, bylines, and labels.
+pub const BODY: f32 = 13.5;
+
+/// One color set. The names match the mockup's tokens.
+#[derive(Debug, Clone, Copy)]
+pub struct Colors {
+    /// The window ground, the toolbar, the header row, the sidebar.
+    pub window: Color,
+    /// The table body, the filter field.
+    pub surface: Color,
+    /// A row under the pointer.
+    pub surface_2: Color,
+    /// Row and pane separators.
+    pub line: Color,
+    /// The filter field border.
+    pub line_strong: Color,
+    /// Text.
+    pub ink: Color,
+    /// The byline, the percent.
+    pub ink_2: Color,
+    /// Headers, secondary cells, labels.
+    pub muted: Color,
+    /// Placeholders, dashes, series numbers.
+    pub faint: Color,
+    /// The sort arrow, the selected row mark, the focus ring.
+    pub accent: Color,
+    /// The selected row ground.
+    pub accent_tint: Color,
+    pub reading: Color,
+    pub reading_tint: Color,
+    pub finished: Color,
+    pub finished_tint: Color,
+    pub unread: Color,
+    pub unread_tint: Color,
+}
+
+const fn hex(rgb: u32) -> Color {
+    Color::from_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
+}
+
+pub const LIGHT: Colors = Colors {
+    window: hex(0xF6F7F5),
+    surface: hex(0xFFFFFF),
+    surface_2: hex(0xF1F3F0),
+    line: hex(0xD9DDD9),
+    line_strong: hex(0xC3C9C4),
+    ink: hex(0x1C1F1E),
+    ink_2: hex(0x4A524F),
+    muted: hex(0x697270),
+    faint: hex(0x98A09D),
+    accent: hex(0x2B6777),
+    accent_tint: hex(0xE3EEF1),
+    reading: hex(0xB7791F),
+    reading_tint: hex(0xF6ECD8),
+    finished: hex(0x2E7D4F),
+    finished_tint: hex(0xDFF0E4),
+    unread: hex(0x8A918E),
+    unread_tint: hex(0xECEEED),
+};
+
+pub const DARK: Colors = Colors {
+    window: hex(0x1A1D1E),
+    surface: hex(0x1F2324),
+    surface_2: hex(0x262B2C),
+    line: hex(0x2E3436),
+    line_strong: hex(0x3C4447),
+    ink: hex(0xE6E5E0),
+    ink_2: hex(0xB8BCB8),
+    muted: hex(0x8F9793),
+    faint: hex(0x667070),
+    accent: hex(0x7FB8C6),
+    accent_tint: hex(0x1F3236),
+    reading: hex(0xE0A94A),
+    reading_tint: hex(0x3A2F16),
+    finished: hex(0x5FBF85),
+    finished_tint: hex(0x1B3426),
+    unread: hex(0x7D8683),
+    unread_tint: hex(0x2A2F30),
+};
+
+/// The color set for the theme Iced picked from the system.
+pub fn colors(theme: &Theme) -> &'static Colors {
+    if theme.extended_palette().is_dark {
+        &DARK
+    } else {
+        &LIGHT
+    }
+}
+
+impl Colors {
+    /// The text color and the ground for a progress status: 0 unread,
+    /// 1 reading, 2 finished. Any other value gets the unread pair.
+    pub fn status(&self, status: i64) -> (Color, Color) {
+        match status {
+            1 => (self.reading, self.reading_tint),
+            2 => (self.finished, self.finished_tint),
+            _ => (self.unread, self.unread_tint),
+        }
+    }
+}
+
+/// The window ground and the default text color.
+pub fn window(theme: &Theme) -> iced::theme::Style {
+    let c = colors(theme);
+    iced::theme::Style {
+        background_color: c.window,
+        text_color: c.ink,
+    }
+}
+
+/// A text style that picks one color from the set, for
+/// `text(...).style(theme::text_color(|c| c.muted))`.
+pub fn text_color(pick: fn(&Colors) -> Color) -> impl Fn(&Theme) -> text::Style {
+    move |theme| text::Style {
+        color: Some(pick(colors(theme))),
+    }
+}
+
+/// A container ground that picks one color from the set.
+pub fn ground(pick: fn(&Colors) -> Color) -> impl Fn(&Theme) -> container::Style {
+    move |theme| container::Style {
+        background: Some(Background::Color(pick(colors(theme)))),
+        ..container::Style::default()
+    }
+}
+
+/// A 1 px `line` across the full width.
+pub fn hline<'a, M: 'a>() -> Element<'a, M> {
+    container(iced::widget::space())
+        .width(Fill)
+        .height(1)
+        .style(ground(|c| c.line))
+        .into()
+}
+
+/// A 1 px `line` down the full height.
+pub fn vline<'a, M: 'a>() -> Element<'a, M> {
+    container(iced::widget::space())
+        .width(1)
+        .height(Fill)
+        .style(ground(|c| c.line))
+        .into()
+}
+
+/// The status chip: the status word on its tint, with a 3 px radius.
+pub fn chip(status: i64) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let (color, tint) = colors(theme).status(status);
+        container::Style {
+            text_color: Some(color),
+            background: Some(Background::Color(tint)),
+            border: border::rounded(3),
+            ..container::Style::default()
+        }
+    }
+}
+
+/// The progress bar: `reading` or `finished` on an `unread_tint` track.
+pub fn bar(status: i64) -> impl Fn(&Theme) -> progress_bar::Style {
+    move |theme| {
+        let c = colors(theme);
+        let fill = match status {
+            2 => c.finished,
+            _ => c.reading,
+        };
+        progress_bar::Style {
+            background: Background::Color(c.unread_tint),
+            bar: Background::Color(fill),
+            border: border::rounded(2),
+        }
+    }
+}
+
+/// A column header: plain text on the header row's ground.
+pub fn header(theme: &Theme, _status: button::Status) -> button::Style {
+    button::Style {
+        background: None,
+        text_color: colors(theme).muted,
+        border: Border::default(),
+        ..button::Style::default()
+    }
+}
+
+/// A table row. The selected row sits on `accent_tint`; a row under the
+/// pointer sits on `surface_2`; the rest sit on `surface`.
+pub fn row(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let c = colors(theme);
+        let ground = if selected {
+            c.accent_tint
+        } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+            c.surface_2
+        } else {
+            c.surface
+        };
+        button::Style {
+            background: Some(Background::Color(ground)),
+            text_color: c.ink,
+            border: Border::default(),
+            ..button::Style::default()
+        }
+    }
+}
+
+/// The sidebar's close button: a bare glyph that gets a `surface_2` ground
+/// under the pointer.
+pub fn close(theme: &Theme, status: button::Status) -> button::Style {
+    let c = colors(theme);
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: hovered.then_some(Background::Color(c.surface_2)),
+        text_color: if hovered { c.ink } else { c.muted },
+        border: border::rounded(5),
+        ..button::Style::default()
+    }
+}
+
+/// The filter field: a `surface` box with a `line_strong` border that turns
+/// `accent` while the field has focus.
+pub fn filter(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let c = colors(theme);
+    let focused = matches!(status, text_input::Status::Focused { .. });
+    text_input::Style {
+        background: Background::Color(c.surface),
+        border: Border {
+            color: if focused { c.accent } else { c.line_strong },
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        icon: c.muted,
+        placeholder: c.faint,
+        value: c.ink,
+        selection: c.accent_tint,
+    }
+}

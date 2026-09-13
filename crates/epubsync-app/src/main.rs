@@ -4,6 +4,7 @@
 
 mod description;
 mod read;
+mod theme;
 
 use epubsync_core::config;
 use epubsync_core::library::{Book, Library, ProgressRow};
@@ -54,7 +55,13 @@ fn main() -> iced::Result {
     };
     iced::application(move || viewer.clone(), update, view)
         .title("EpubSync")
-        .theme(theme)
+        .window_size((1180.0, 760.0))
+        .default_font(theme::SANS)
+        .font(include_bytes!("../fonts/instrument-sans/InstrumentSans[wdth,wght].ttf").as_slice())
+        .font(include_bytes!("../fonts/newsreader/Newsreader[opsz,wght].ttf").as_slice())
+        .font(include_bytes!("../fonts/newsreader/Newsreader-Italic[opsz,wght].ttf").as_slice())
+        .font(include_bytes!("../fonts/jetbrains-mono/JetBrainsMono[wght].ttf").as_slice())
+        .style(|_viewer, theme| theme::window(theme))
         .run()
 }
 
@@ -112,12 +119,6 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
             row![book_list(books, selected_id), book_pane(shown, progress)].into()
         }
     }
-}
-
-/// The theme is fixed so that the description's Markdown, which takes a
-/// theme when it is drawn, matches the rest of the window.
-fn theme(_viewer: &Viewer) -> Theme {
-    Theme::Light
 }
 
 /// The left pane: one button per book. The selected book's button is
