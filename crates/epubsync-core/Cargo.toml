@@ -9,6 +9,7 @@ links = "kepubshim"
 
 [dependencies]
 anyhow = "1.0.104"
+roxmltree = "0.21.1"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]

@@ -11,15 +11,15 @@ use zip::write::SimpleFileOptions;
 
 pub const OPF_PATH: &str = "OEBPS/content.opf";
 
-pub const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+pub const CONTAINER_XML: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
     <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
   </rootfiles>
 </container>
-"#;
+"##;
 
-pub const CHAPTER_XHTML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+pub const CHAPTER_XHTML: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head><title>Chapter 1</title></head>
 <body>
@@ -27,10 +27,10 @@ pub const CHAPTER_XHTML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <p>It was a dark and stormy night. The rain fell in torrents.</p>
 </body>
 </html>
-"#;
+"##;
 
 /// A small EPUB 2 OPF in the shape Calibre writes.
-pub const EPUB2_OPF: &str = r#"<?xml version='1.0' encoding='utf-8'?>
+pub const EPUB2_OPF: &str = r##"<?xml version='1.0' encoding='utf-8'?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="uuid_id" version="2.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
     <dc:identifier id="uuid_id" opf:scheme="uuid">a1b2c3</dc:identifier>
@@ -52,9 +52,9 @@ pub const EPUB2_OPF: &str = r#"<?xml version='1.0' encoding='utf-8'?>
     <itemref idref="ch1"/>
   </spine>
 </package>
-"#;
+"##;
 
-pub const TOC_NCX: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+pub const TOC_NCX: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
   <head><meta name="dtb:uid" content="a1b2c3"/></head>
   <docTitle><text>Book</text></docTitle>
@@ -62,7 +62,7 @@ pub const TOC_NCX: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <navPoint id="n1" playOrder="1"><navLabel><text>Chapter 1</text></navLabel><content src="chapter1.xhtml"/></navPoint>
   </navMap>
 </ncx>
-"#;
+"##;
 
 /// A 1x1 JPEG, enough for a cover entry.
 pub const COVER_JPEG: &[u8] = &[
@@ -116,3 +116,127 @@ pub fn read_entry(path: &Path, name: &str) -> String {
     std::io::Read::read_to_string(&mut entry, &mut text).unwrap();
     text
 }
+
+/// An EPUB 3 OPF with refinements and a `belongs-to-collection` series.
+pub const EPUB3_OPF: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id" xml:lang="en">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:d4e5f6</dc:identifier>
+    <dc:title id="t1">A Wizard of Earthsea</dc:title>
+    <dc:creator id="creator01">Ursula K. Le Guin</dc:creator>
+    <meta refines="#creator01" property="role" scheme="marc:relators">aut</meta>
+    <meta refines="#creator01" property="file-as">Le Guin, Ursula K.</meta>
+    <dc:language>en</dc:language>
+    <dc:publisher>Parnassus Press</dc:publisher>
+    <dc:description>Ged the sparrowhawk.</dc:description>
+    <meta property="dcterms:modified">2024-01-01T00:00:00Z</meta>
+    <meta property="belongs-to-collection" id="c01">Earthsea Cycle</meta>
+    <meta refines="#c01" property="collection-type">series</meta>
+    <meta refines="#c01" property="group-position">1</meta>
+  </metadata>
+  <manifest>
+    <item id="cover" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>
+"##;
+
+/// An EPUB 3 OPF as Calibre writes it: both `file-as` forms on one creator
+/// and the Calibre series metas.
+pub const EPUB3_CALIBRE_OPF: &str = r##"<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="uuid_id" version="3.0" prefix="calibre: https://calibre-ebook.com">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:identifier id="uuid_id">urn:uuid:112233</dc:identifier>
+    <dc:title>The Dispossessed</dc:title>
+    <dc:creator id="id" opf:file-as="Le Guin, Ursula K." opf:role="aut">Ursula K. Le Guin</dc:creator>
+    <meta refines="#id" property="file-as">Le Guin, Ursula K.</meta>
+    <meta refines="#id" property="role" scheme="marc:relators">aut</meta>
+    <dc:language>en</dc:language>
+    <dc:publisher>Harper &amp; Row</dc:publisher>
+    <dc:description>An ambiguous utopia.</dc:description>
+    <meta name="calibre:series" content="Hainish Cycle"/>
+    <meta name="calibre:series_index" content="5"/>
+    <meta property="dcterms:modified">2024-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="cover" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>
+"##;
+
+/// An EPUB 2 OPF whose `description` carries the Dublin Core namespace as
+/// its own default namespace instead of the `dc:` prefix.
+pub const DEFAULT_NS_DESCRIPTION_OPF: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:identifier id="bookid">isbn-0</dc:identifier>
+    <dc:title>The Lathe of Heaven</dc:title>
+    <dc:creator opf:file-as="Le Guin, Ursula K.">Ursula K. Le Guin</dc:creator>
+    <dc:language>en</dc:language>
+    <description xmlns="http://purl.org/dc/elements/1.1/">Dreams that change the world.</description>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>
+"##;
+
+/// An EPUB 3 OPF with two titles, the second marked `main`.
+pub const TWO_TITLES_OPF: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">urn:uuid:aa</dc:identifier>
+    <dc:title id="t1">Earthsea</dc:title>
+    <meta refines="#t1" property="title-type">collection</meta>
+    <dc:title id="t2">The Tombs of Atuan</dc:title>
+    <meta refines="#t2" property="title-type">main</meta>
+    <dc:creator id="a1">Ursula K. Le Guin</dc:creator>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>
+"##;
+
+/// An EPUB 2 OPF with no series, no publisher, no description, no `file-as`,
+/// and no `opf` prefix declared.
+pub const BARE_OPF: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="bookid">isbn-1</dc:identifier>
+    <dc:title>Candide</dc:title>
+    <dc:creator>Voltaire</dc:creator>
+    <dc:language>fr</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>
+"##;
+
+pub const ALL_OPFS: &[(&str, &str)] = &[
+    ("epub2", EPUB2_OPF),
+    ("epub3", EPUB3_OPF),
+    ("epub3-calibre", EPUB3_CALIBRE_OPF),
+    ("default-ns-description", DEFAULT_NS_DESCRIPTION_OPF),
+    ("two-titles", TWO_TITLES_OPF),
+    ("bare", BARE_OPF),
+];

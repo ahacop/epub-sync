@@ -1,0 +1,223 @@
+mod common;
+
+use epubsync_core::opf::{self, Element, Opf, SeriesForm, Version};
+
+fn parse(text: &str) -> Opf {
+    opf::parse(common::OPF_PATH, text.to_string()).unwrap()
+}
+
+/// Checks that an element's range slices exactly `expected` out of the text.
+fn assert_slice(opf: &Opf, element: &Element, expected: &str) {
+    assert_eq!(&opf.text[element.range.clone()], expected);
+}
+
+#[test]
+fn reads_through_the_zip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = common::write_epub(dir.path(), "book.epub", common::EPUB2_OPF);
+    let opf = opf::read(&path).unwrap();
+    assert_eq!(opf.path, common::OPF_PATH);
+    assert_eq!(opf.text, common::EPUB2_OPF);
+    assert_eq!(opf.title.unwrap().value, "The Left Hand of Darkness");
+}
+
+#[test]
+fn reads_epub2_from_calibre() {
+    let opf = parse(common::EPUB2_OPF);
+    assert_eq!(opf.version, Version::Epub2);
+    assert_eq!(opf.opf_prefix.as_deref(), Some("opf"));
+    assert_eq!(opf.dc_prefix.as_deref(), Some("dc"));
+
+    let title = opf.title.as_ref().unwrap();
+    assert_eq!(title.value, "The Left Hand of Darkness");
+    assert_eq!(title.qname, "dc:title");
+    assert_slice(
+        &opf,
+        title,
+        "<dc:title>The Left Hand of Darkness</dc:title>",
+    );
+
+    assert_eq!(opf.creators.len(), 1);
+    let creator = &opf.creators[0];
+    assert_eq!(creator.name, "Ursula K. Le Guin");
+    assert_eq!(creator.file_as_attr.as_deref(), Some("Le Guin, Ursula K."));
+    assert!(creator.file_as_meta.is_none());
+    assert_eq!(creator.sort(), Some("Le Guin, Ursula K."));
+    assert_eq!(
+        creator.attributes,
+        vec![
+            r##"opf:file-as="Le Guin, Ursula K.""##,
+            r##"opf:role="aut""##
+        ]
+    );
+    assert_eq!(
+        &opf.text[creator.range.clone()],
+        r##"<dc:creator opf:file-as="Le Guin, Ursula K." opf:role="aut">Ursula K. Le Guin</dc:creator>"##
+    );
+
+    assert_slice(
+        &opf,
+        opf.publisher.as_ref().unwrap(),
+        "<dc:publisher>Ace Books</dc:publisher>",
+    );
+    let description = opf.description.as_ref().unwrap();
+    assert_eq!(description.value, "<p>A novel of Winter.</p>");
+    assert_slice(
+        &opf,
+        description,
+        "<dc:description>&lt;p&gt;A novel of Winter.&lt;/p&gt;</dc:description>",
+    );
+    assert_eq!(opf.language.as_deref(), Some("en"));
+
+    let series = opf.series.as_ref().unwrap();
+    assert_eq!(series.name, "Hainish Cycle");
+    assert_eq!(series.number, Some(4.0));
+    let (name, series_index) = match &series.form {
+        SeriesForm::Calibre { name, index } => (name, index),
+        other => panic!("expected the Calibre form, got {other:?}"),
+    };
+    assert_slice(
+        &opf,
+        name,
+        r##"<meta name="calibre:series" content="Hainish Cycle"/>"##,
+    );
+    assert_slice(
+        &opf,
+        series_index.as_ref().unwrap(),
+        r##"<meta name="calibre:series_index" content="4"/>"##,
+    );
+
+    assert_eq!(opf.cover_path.as_deref(), Some("OEBPS/cover.jpg"));
+    assert_eq!(opf.insert_at, series_index.as_ref().unwrap().range.end);
+    assert_eq!(opf.indent, "\n    ");
+}
+
+#[test]
+fn reads_epub3_with_refinements_and_collection() {
+    let opf = parse(common::EPUB3_OPF);
+    assert_eq!(opf.version, Version::Epub3);
+    assert_eq!(opf.opf_prefix, None);
+
+    let creator = &opf.creators[0];
+    assert_eq!(creator.id.as_deref(), Some("creator01"));
+    assert!(creator.file_as_attr.is_none());
+    let meta = creator.file_as_meta.as_ref().unwrap();
+    assert_eq!(meta.value, "Le Guin, Ursula K.");
+    assert_slice(
+        &opf,
+        meta,
+        r##"<meta refines="#creator01" property="file-as">Le Guin, Ursula K.</meta>"##,
+    );
+    assert_eq!(creator.sort(), Some("Le Guin, Ursula K."));
+
+    let series = opf.series.as_ref().unwrap();
+    assert_eq!(series.name, "Earthsea Cycle");
+    assert_eq!(series.number, Some(1.0));
+    let (collection, id, collection_type, group_position) = match &series.form {
+        SeriesForm::Collection {
+            collection,
+            id,
+            collection_type,
+            group_position,
+        } => (collection, id, collection_type, group_position),
+        other => panic!("expected the collection form, got {other:?}"),
+    };
+    assert_eq!(id, "c01");
+    assert_slice(
+        &opf,
+        collection,
+        r##"<meta property="belongs-to-collection" id="c01">Earthsea Cycle</meta>"##,
+    );
+    assert_slice(
+        &opf,
+        collection_type.as_ref().unwrap(),
+        r##"<meta refines="#c01" property="collection-type">series</meta>"##,
+    );
+    assert_slice(
+        &opf,
+        group_position.as_ref().unwrap(),
+        r##"<meta refines="#c01" property="group-position">1</meta>"##,
+    );
+
+    assert_eq!(opf.cover_path.as_deref(), Some("OEBPS/cover.jpg"));
+    assert_eq!(opf.insert_at, group_position.as_ref().unwrap().range.end);
+}
+
+#[test]
+fn reads_both_file_as_forms_on_one_creator() {
+    let opf = parse(common::EPUB3_CALIBRE_OPF);
+    let creator = &opf.creators[0];
+    assert_eq!(creator.file_as_attr.as_deref(), Some("Le Guin, Ursula K."));
+    assert_eq!(
+        creator.file_as_meta.as_ref().unwrap().value,
+        "Le Guin, Ursula K."
+    );
+    assert_eq!(opf.publisher.as_ref().unwrap().value, "Harper & Row");
+    assert!(matches!(
+        opf.series.as_ref().unwrap().form,
+        SeriesForm::Calibre { .. }
+    ));
+    assert_eq!(opf.series.as_ref().unwrap().number, Some(5.0));
+}
+
+#[test]
+fn reads_a_description_in_default_namespace_form() {
+    let opf = parse(common::DEFAULT_NS_DESCRIPTION_OPF);
+    let description = opf.description.as_ref().unwrap();
+    assert_eq!(description.value, "Dreams that change the world.");
+    assert_eq!(description.qname, "description");
+    assert_slice(
+        &opf,
+        description,
+        r##"<description xmlns="http://purl.org/dc/elements/1.1/">Dreams that change the world.</description>"##,
+    );
+    assert!(opf.series.is_none());
+    assert!(opf.publisher.is_none());
+    assert!(opf.cover_path.is_none());
+}
+
+#[test]
+fn picks_the_main_title() {
+    let opf = parse(common::TWO_TITLES_OPF);
+    let title = opf.title.as_ref().unwrap();
+    assert_eq!(title.value, "The Tombs of Atuan");
+    assert_slice(
+        &opf,
+        title,
+        r##"<dc:title id="t2">The Tombs of Atuan</dc:title>"##,
+    );
+}
+
+#[test]
+fn reads_a_file_with_no_series_and_no_file_as() {
+    let opf = parse(common::BARE_OPF);
+    assert_eq!(opf.version, Version::Epub2);
+    assert_eq!(opf.opf_prefix, None);
+    let creator = &opf.creators[0];
+    assert_eq!(creator.name, "Voltaire");
+    assert_eq!(creator.sort(), None);
+    assert!(creator.attributes.is_empty());
+    assert!(opf.series.is_none());
+    assert!(opf.publisher.is_none());
+    assert!(opf.description.is_none());
+    assert_eq!(opf.language.as_deref(), Some("fr"));
+    assert_eq!(opf.insert_at, creator.range.end);
+    assert_eq!(opf.indent, "\n    ");
+}
+
+#[test]
+fn owned_ranges_do_not_overlap_in_any_fixture() {
+    for (name, text) in common::ALL_OPFS {
+        let opf = parse(text);
+        let ranges = opf.owned_ranges();
+        for pair in ranges.windows(2) {
+            assert!(
+                pair[0].end <= pair[1].start,
+                "{name}: {:?} overlaps {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(opf.title.is_some(), "{name}: no title");
+    }
+}
