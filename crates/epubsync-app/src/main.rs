@@ -2,12 +2,13 @@
 //! selected book on the right. It is read-only. The CLI imports, edits,
 //! removes, and syncs.
 
+mod description;
 mod read;
 
 use epubsync_core::config;
 use epubsync_core::library::{Book, Library, ProgressRow};
 use epubsync_core::metadata::{Series, format_series_number};
-use iced::widget::{button, column, container, row, scrollable, text};
+use iced::widget::{button, column, container, markdown, row, scrollable, text};
 use iced::{Element, Fill, Length, Theme};
 
 use crate::read::Entry;
@@ -32,12 +33,16 @@ enum Viewer {
 #[derive(Debug, Clone)]
 struct Selected {
     id: i64,
+    /// The book's description, parsed for the markdown widget.
+    description: Vec<markdown::Item>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     /// A click on a book in the list.
     Select(i64),
+    /// A click on a link in the description. It does nothing.
+    LinkClicked,
 }
 
 fn main() -> iced::Result {
@@ -68,11 +73,26 @@ fn open() -> anyhow::Result<(Library, Viewer)> {
 }
 
 fn update(viewer: &mut Viewer, message: Message) {
-    let Viewer::Open { selected, .. } = viewer else {
+    let Viewer::Open {
+        books, selected, ..
+    } = viewer
+    else {
         return;
     };
     match message {
-        Message::Select(id) => *selected = Some(Selected { id }),
+        Message::Select(id) => {
+            // The description is parsed only when the book is shown.
+            let html = books
+                .iter()
+                .find(|e| e.book.id == id)
+                .and_then(|e| e.book.metadata.description.as_deref())
+                .unwrap_or("");
+            *selected = Some(Selected {
+                id,
+                description: description::parse(html),
+            });
+        }
+        Message::LinkClicked => {}
     }
 }
 
@@ -84,9 +104,12 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
             progress,
             selected,
         } => {
+            let shown = selected.as_ref().and_then(|s| {
+                let entry = books.iter().find(|e| e.book.id == s.id)?;
+                Some((entry, s))
+            });
             let selected_id = selected.as_ref().map(|s| s.id);
-            let entry = books.iter().find(|e| Some(e.book.id) == selected_id);
-            row![book_list(books, selected_id), book_pane(entry, progress)].into()
+            row![book_list(books, selected_id), book_pane(shown, progress)].into()
         }
     }
 }
@@ -119,10 +142,13 @@ fn book_list(books: &[Entry], selected_id: Option<i64>) -> Element<'_, Message> 
         .into()
 }
 
-/// The right pane: the selected book's metadata, its progress on each
-/// device, and its id and file path.
-fn book_pane<'a>(entry: Option<&'a Entry>, progress: &'a [ProgressRow]) -> Element<'a, Message> {
-    let Some(entry) = entry else {
+/// The right pane: the selected book's metadata, its description, its
+/// progress on each device, and its id and file path.
+fn book_pane<'a>(
+    shown: Option<(&'a Entry, &'a Selected)>,
+    progress: &'a [ProgressRow],
+) -> Element<'a, Message> {
+    let Some((entry, selected)) = shown else {
         return container(text("Select a book"))
             .width(Length::FillPortion(3))
             .padding(16)
@@ -138,6 +164,8 @@ fn book_pane<'a>(entry: Option<&'a Entry>, progress: &'a [ProgressRow]) -> Eleme
     if let Some(publisher) = &m.publisher {
         lines = lines.push(text(publisher));
     }
+    lines = lines
+        .push(markdown::view(&selected.description, Theme::Light).map(|_uri| Message::LinkClicked));
     for p in progress.iter().filter(|p| p.book_id == book.id) {
         lines = lines.push(text(progress_cell(p)));
     }
