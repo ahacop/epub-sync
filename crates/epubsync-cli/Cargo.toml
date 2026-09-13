@@ -1,0 +1,14 @@
+[package]
+name = "epubsync-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "EpubSync command line"
+
+[[bin]]
+name = "epubsync"
+path = "src/main.rs"
+
+[dependencies]
+epubsync-core = { path = "../epubsync-core" }
