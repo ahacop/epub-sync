@@ -1,12 +1,17 @@
 //! A Kobo over USB mass storage: a mounted volume with a `.kobo/version`
 //! file. Books go into the `EpubSync` folder at the root of the volume as
-//! `<id>.kepub.epub`.
+//! `<id>.kepub.epub`. The Kobo database is opened in place for the row
+//! updates and the read back.
+
+pub mod db;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::device::{Action, Device, ReadBack};
+use crate::device::{Action, Device, ReadBack, RowUpdate};
+use crate::metadata::Metadata;
+use db::KoboDb;
 
 pub const FOLDER: &str = "EpubSync";
 const VERSION_FILE: &str = ".kobo/version";
@@ -14,6 +19,8 @@ const VERSION_FILE: &str = ".kobo/version";
 pub struct Kobo {
     pub serial: String,
     pub root: PathBuf,
+    db: Option<KoboDb>,
+    allow_untested: bool,
 }
 
 /// The mount folders detect scans: `/run/media/$USER`, `/media`,
@@ -60,7 +67,31 @@ impl Kobo {
         Ok(Kobo {
             serial,
             root: root.to_path_buf(),
+            db: None,
+            allow_untested: false,
         })
+    }
+
+    /// Opens `.kobo/KoboReader.sqlite` when the volume has one. With
+    /// `allow_untested` the row writes run on any database version.
+    pub fn open_db(&mut self, allow_untested: bool) -> Result<()> {
+        let path = self.root.join(db::DB_PATH);
+        if path.exists() {
+            self.db = Some(KoboDb::open(&path)?);
+        }
+        self.allow_untested = allow_untested;
+        Ok(())
+    }
+
+    pub fn db_version(&self) -> Option<i64> {
+        self.db.as_ref().map(|d| d.version)
+    }
+
+    fn writes_allowed(&self) -> bool {
+        match &self.db {
+            Some(db) => db.is_tested() || self.allow_untested,
+            None => false,
+        }
     }
 
     pub fn folder(&self) -> PathBuf {
@@ -80,6 +111,13 @@ impl Kobo {
 /// Parses the book id out of a device file name such as `12.kepub.epub`.
 pub fn id_from_file_name(name: &str) -> Option<i64> {
     name.strip_suffix(".kepub.epub")?.parse().ok()
+}
+
+/// Parses the book id out of a volume id such as
+/// `file:///mnt/onboard/EpubSync/12.kepub.epub`.
+pub fn id_from_volume_id(volume_id: &str) -> Option<i64> {
+    let name = volume_id.strip_prefix(&format!("file:///mnt/onboard/{FOLDER}/"))?;
+    id_from_file_name(name)
 }
 
 impl Device for Kobo {
@@ -102,13 +140,28 @@ impl Device for Kobo {
     }
 
     fn apply(&mut self, action: &Action, source: &Path) -> Result<()> {
-        let target = self.book_path(action.id());
+        let id = action.id();
+        let target = self.book_path(id);
+        let volume_id = self.volume_id(id);
+        let writes = self.writes_allowed();
         match action {
             Action::Send { .. } | Action::Replace { .. } | Action::SendAgain { .. } => {
+                if matches!(action, Action::SendAgain { .. })
+                    && writes
+                    && let Some(db) = &self.db
+                {
+                    db.delete_stale_row(&volume_id)?;
+                }
                 std::fs::create_dir_all(self.folder())?;
-                std::fs::copy(source, &target)
+                let size = std::fs::copy(source, &target)
                     .with_context(|| format!("copy to {}", target.display()))?;
                 std::fs::File::open(&target)?.sync_all()?;
+                if matches!(action, Action::Replace { .. })
+                    && writes
+                    && let Some(db) = &self.db
+                {
+                    db.update_file_size(&volume_id, size as i64)?;
+                }
             }
             Action::Delete { .. } => {
                 std::fs::remove_file(&target)
@@ -118,11 +171,53 @@ impl Device for Kobo {
         Ok(())
     }
 
-    fn read_back(&mut self, _book_ids: &[i64]) -> Result<ReadBack> {
-        Ok(ReadBack::default())
+    fn write_gate(&self) -> Option<String> {
+        match &self.db {
+            Some(db) if !db.is_tested() && !self.allow_untested => Some(format!(
+                "Kobo database version {} has not been tested. Replacements and row updates are skipped. \
+                 Pass --allow-newer-firmware to run them.",
+                db.version
+            )),
+            _ => None,
+        }
+    }
+
+    fn update_rows(&mut self, records: &[(i64, &Metadata)]) -> Result<Vec<(i64, RowUpdate)>> {
+        let Some(db) = &mut self.db else {
+            return Ok(records
+                .iter()
+                .map(|(id, _)| (*id, RowUpdate::NoRow))
+                .collect());
+        };
+        let tx = db.begin()?;
+        let mut results = Vec::new();
+        for (id, record) in records {
+            let volume_id = format!("file:///mnt/onboard/{FOLDER}/{id}.kepub.epub");
+            results.push((*id, db::update_metadata(&tx, &volume_id, record)?));
+        }
+        tx.commit()?;
+        Ok(results)
+    }
+
+    fn read_back(&mut self, book_ids: &[i64]) -> Result<ReadBack> {
+        let Some(db) = &self.db else {
+            return Ok(ReadBack::default());
+        };
+        let mut progress = Vec::new();
+        for id in book_ids {
+            if let Some(p) = db.progress(&self.volume_id(*id), *id)? {
+                progress.push(p);
+            }
+        }
+        let words =
+            db.words(|volume_id| id_from_volume_id(volume_id).filter(|id| book_ids.contains(id)))?;
+        Ok(ReadBack { progress, words })
     }
 
     fn finish(&mut self) -> Result<()> {
+        if let Some(db) = self.db.take() {
+            db.close()?;
+        }
         Ok(())
     }
 }

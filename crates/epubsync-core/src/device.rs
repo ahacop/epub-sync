@@ -5,6 +5,8 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::metadata::Metadata;
+
 /// One thing sync does to the device folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -57,6 +59,17 @@ pub struct Word {
     pub looked_up_at: String,
 }
 
+/// What an update of a book's row on the device did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowUpdate {
+    /// One or more columns differed and were written.
+    Updated,
+    /// The row already matched the record.
+    Unchanged,
+    /// The device has not created the row yet.
+    NoRow,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReadBack {
     pub progress: Vec<Progress>,
@@ -72,6 +85,13 @@ pub trait Device {
     /// Runs one action. `source` is the library file for a send or a
     /// replace, and unused for a delete.
     fn apply(&mut self, action: &Action, source: &Path) -> Result<()>;
+    /// Why the device refuses row writes, when it does. Sync then skips
+    /// replacements too, because a replacement without its row update
+    /// makes the firmware treat the file as a new book.
+    fn write_gate(&self) -> Option<String>;
+    /// Keeps each book's device row equal to its record, in one
+    /// transaction. Returns what happened per book.
+    fn update_rows(&mut self, records: &[(i64, &Metadata)]) -> Result<Vec<(i64, RowUpdate)>>;
     /// Reads progress for the given book ids and every looked-up word.
     fn read_back(&mut self, book_ids: &[i64]) -> Result<ReadBack>;
     /// Flushes and closes anything sync opened on the device.

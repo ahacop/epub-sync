@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use rusqlite::params;
 
-use crate::device::{Action, BookRevision, Device, ReadBack};
+use crate::device::{Action, BookRevision, Device, ReadBack, RowUpdate};
 use crate::library::Library;
 
 /// Records the device and returns the actions for it.
@@ -111,4 +111,30 @@ pub fn read_back(library: &mut Library, device: &mut dyn Device) -> Result<ReadB
         progress: back.progress,
         words: new_words,
     })
+}
+
+/// Splits the actions by the device's write gate: replacements are
+/// skipped when the gate is up. Returns the kept actions, the skipped
+/// ones, and the gate's reason.
+pub fn gate(
+    actions: Vec<Action>,
+    device: &dyn Device,
+) -> (Vec<Action>, Vec<Action>, Option<String>) {
+    match device.write_gate() {
+        None => (actions, Vec::new(), None),
+        Some(reason) => {
+            let (skipped, kept): (Vec<Action>, Vec<Action>) = actions
+                .into_iter()
+                .partition(|a| matches!(a, Action::Replace { .. }));
+            (kept, skipped, Some(reason))
+        }
+    }
+}
+
+/// Keeps every library book's device row equal to its record.
+pub fn update_rows(library: &Library, device: &mut dyn Device) -> Result<Vec<(i64, RowUpdate)>> {
+    let books = library.list()?;
+    let records: Vec<(i64, &crate::metadata::Metadata)> =
+        books.iter().map(|b| (b.id, &b.metadata)).collect();
+    device.update_rows(&records)
 }

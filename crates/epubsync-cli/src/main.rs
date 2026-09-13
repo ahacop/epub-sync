@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use epubsync_core::config::{self, Config};
-use epubsync_core::device::{Action, Device};
+use epubsync_core::device::{Action, Device, RowUpdate};
 use epubsync_core::kobo::{self, Kobo};
 use epubsync_core::library::{Book, ImportOutcome, Library};
 use epubsync_core::metadata::{Author, Metadata, Series, format_series_number};
@@ -365,7 +365,6 @@ fn remove(config: &Config, id: i64, yes: bool) -> Result<()> {
 struct SyncFlags {
     dry_run: bool,
     device: Option<PathBuf>,
-    #[allow(dead_code)]
     allow_newer_firmware: bool,
     yes: bool,
 }
@@ -391,13 +390,23 @@ fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
         }
     };
     println!("Kobo {} at {}", kobo.serial(), kobo.root.display());
+    kobo.open_db(flags.allow_newer_firmware)?;
+    if let Some(v) = kobo.db_version() {
+        println!("Kobo database version {v}");
+    }
 
-    let mut actions = core_sync::plan(&lib, &kobo)?;
-    if actions.is_empty() {
+    let (mut actions, skipped, gate) = core_sync::gate(core_sync::plan(&lib, &kobo)?, &kobo);
+    if let Some(reason) = &gate {
+        println!("{reason}");
+    }
+    if actions.is_empty() && skipped.is_empty() {
         println!("nothing to do");
     }
     for action in &actions {
         println!("{}", action_line(&lib, action)?);
+    }
+    for action in &skipped {
+        println!("skipped: {}", action_line(&lib, action)?);
     }
     if flags.dry_run {
         return Ok(());
@@ -430,6 +439,23 @@ fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
         };
         println!("{verb} {}", a.id());
     })?;
+
+    if gate.is_none() {
+        let sent_now: Vec<i64> = actions
+            .iter()
+            .filter(|a| !matches!(a, Action::Delete { .. }))
+            .map(Action::id)
+            .collect();
+        for (id, outcome) in core_sync::update_rows(&lib, &mut kobo)? {
+            match outcome {
+                RowUpdate::Updated => println!("updated the Kobo row for {id}"),
+                RowUpdate::NoRow if sent_now.contains(&id) => {
+                    println!("series appears on the next sync for {id}")
+                }
+                RowUpdate::NoRow | RowUpdate::Unchanged => {}
+            }
+        }
+    }
 
     let back = core_sync::read_back(&mut lib, &mut kobo)?;
     if !back.progress.is_empty() {
