@@ -36,7 +36,7 @@
             meta = {
               description = "Manage a KEPUB library and sync it to a Kobo";
               homepage = "https://github.com/ahacop/epub-sync";
-              license = pkgs.lib.licenses.mit;
+              license = pkgs.lib.licenses.gpl3Plus;
               mainProgram = "epubsync";
             };
           };
