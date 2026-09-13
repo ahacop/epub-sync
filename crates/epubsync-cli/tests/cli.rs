@@ -254,3 +254,82 @@ fn syncs_to_a_folder_that_looks_like_a_kobo() {
         .success()
         .stdout(predicate::str::contains("nothing to do"));
 }
+
+#[test]
+fn lists_progress_and_words() {
+    let env = Env::new();
+    env.init();
+    let epub = write_epub(env.dir.path(), "lhod.epub", OPF);
+    env.cmd()
+        .args(["import", epub.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let db = rusqlite::Connection::open(env.dir.path().join("library/library.sqlite")).unwrap();
+    db.execute_batch(
+        "INSERT INTO devices (serial) VALUES ('N1'), ('N2');
+         INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
+           (1, 'N1', 37, 1, '2026-09-01T10:00:00Z'),
+           (1, 'N2', 100, 2, '2026-08-01T10:00:00Z');
+         INSERT INTO words (word, device_serial, book_id, volume_id, book_title, dict_suffix, looked_up_at) VALUES
+           ('ansible', 'N1', 1, 'file:///mnt/onboard/EpubSync/1.kepub.epub', 'The Left Hand of Darkness', '-en', '2026-09-02T08:00:00Z'),
+           ('kemmer', 'N1', 1, 'file:///mnt/onboard/EpubSync/1.kepub.epub', 'The Left Hand of Darkness', '-en', '2026-09-02T09:00:00Z'),
+           ('serendipity', 'N2', NULL, 'store-volume', 'A Store Book', '-en', '2026-09-03T10:00:00Z');",
+    )
+    .unwrap();
+    drop(db);
+
+    env.cmd().arg("list").assert().success().stdout(
+        "    1  The Left Hand of Darkness  by Ursula K. Le Guin  [Hainish Cycle #4]  N1: 37% reading 2026-09-01  N2: 100% finished 2026-08-01\n",
+    );
+
+    let out = env
+        .cmd()
+        .arg("words")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 3);
+    assert!(
+        lines[0].starts_with("2026-09-03T10:00:00Z  serendipity"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[0].contains("    -  A Store Book  (N2)"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].starts_with("2026-09-02T09:00:00Z  kemmer"),
+        "{}",
+        lines[1]
+    );
+    assert!(
+        lines[1].contains("    1  The Left Hand of Darkness  (N1)"),
+        "{}",
+        lines[1]
+    );
+    assert!(
+        lines[2].starts_with("2026-09-02T08:00:00Z  ansible"),
+        "{}",
+        lines[2]
+    );
+
+    env.cmd()
+        .args(["words", "--book", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("serendipity").not())
+        .stdout(predicate::str::contains("ansible"));
+    env.cmd()
+        .args(["words", "--device", "N2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("serendipity"))
+        .stdout(predicate::str::contains("ansible").not());
+}

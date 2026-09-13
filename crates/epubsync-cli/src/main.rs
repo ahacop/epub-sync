@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use epubsync_core::config::{self, Config};
 use epubsync_core::device::{Action, Device, RowUpdate};
 use epubsync_core::kobo::{self, Kobo};
-use epubsync_core::library::{Book, ImportOutcome, Library};
+use epubsync_core::library::{Book, ImportOutcome, Library, ProgressRow};
 use epubsync_core::metadata::{Author, Metadata, Series, format_series_number};
 use epubsync_core::sort_name::sort_name;
 use epubsync_core::sync as core_sync;
@@ -145,7 +145,7 @@ fn run(command: Command) -> Result<()> {
                 yes,
             },
         ),
-        Command::Words { .. } => bail!("words is not implemented yet"),
+        Command::Words { book, device } => words(&config, book, device.as_deref()),
     }
 }
 
@@ -195,8 +195,48 @@ fn import(config: &Config, path: &Path, force: bool) -> Result<()> {
 
 fn list(config: &Config) -> Result<()> {
     let lib = Library::open(config)?;
+    let progress = lib.progress()?;
     for book in lib.list()? {
-        println!("{}", book_line(&book));
+        let mut line = book_line(&book);
+        for p in progress.iter().filter(|p| p.book_id == book.id) {
+            line.push_str(&format!("  {}", progress_cell(p)));
+        }
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// One device's progress: the serial, the percent, the status, and the
+/// day last read.
+fn progress_cell(p: &ProgressRow) -> String {
+    let status = match p.status {
+        0 => "unread",
+        1 => "reading",
+        2 => "finished",
+        _ => "status ?",
+    };
+    let day = p
+        .last_read
+        .as_deref()
+        .map(|d| &d[..d.len().min(10)])
+        .unwrap_or("");
+    format!("{}: {}% {status} {day}", p.device_serial, p.percent)
+        .trim_end()
+        .to_string()
+}
+
+fn words(config: &Config, book: Option<i64>, device: Option<&str>) -> Result<()> {
+    let lib = Library::open(config)?;
+    for w in lib.words(book, device)? {
+        let title = w.book_title.as_deref().unwrap_or("");
+        let book = w
+            .book_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "{}  {:<24}  {book:>5}  {title}  ({})",
+            w.looked_up_at, w.word, w.device_serial
+        );
     }
     Ok(())
 }

@@ -295,3 +295,66 @@ fn insert_authors(tx: &rusqlite::Transaction, id: i64, authors: &[Author]) -> Re
     }
     Ok(())
 }
+
+/// Reading progress for one book on one device.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProgressRow {
+    pub book_id: i64,
+    pub device_serial: String,
+    pub percent: i64,
+    pub status: i64,
+    pub last_read: Option<String>,
+}
+
+/// One looked-up word as the library stores it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WordRow {
+    pub word: String,
+    pub device_serial: String,
+    pub book_id: Option<i64>,
+    pub volume_id: String,
+    pub book_title: Option<String>,
+    pub dict_suffix: Option<String>,
+    pub looked_up_at: String,
+}
+
+impl Library {
+    /// Every progress row, in book id then device order.
+    pub fn progress(&self) -> Result<Vec<ProgressRow>> {
+        let mut stmt = self.db.prepare(
+            "SELECT book_id, device_serial, percent, status, last_read FROM progress ORDER BY book_id, device_serial",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ProgressRow {
+                book_id: r.get(0)?,
+                device_serial: r.get(1)?,
+                percent: r.get(2)?,
+                status: r.get(3)?,
+                last_read: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// The looked-up words, newest first, filtered by book id and device
+    /// serial when given.
+    pub fn words(&self, book_id: Option<i64>, device_serial: Option<&str>) -> Result<Vec<WordRow>> {
+        let mut stmt = self.db.prepare(
+            "SELECT word, device_serial, book_id, volume_id, book_title, dict_suffix, looked_up_at FROM words
+             WHERE (?1 IS NULL OR book_id = ?1) AND (?2 IS NULL OR device_serial = ?2)
+             ORDER BY looked_up_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map(params![book_id, device_serial], |r| {
+            Ok(WordRow {
+                word: r.get(0)?,
+                device_serial: r.get(1)?,
+                book_id: r.get(2)?,
+                volume_id: r.get(3)?,
+                book_title: r.get(4)?,
+                dict_suffix: r.get(5)?,
+                looked_up_at: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+}
