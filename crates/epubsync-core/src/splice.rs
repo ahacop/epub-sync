@@ -277,7 +277,7 @@ fn replace_text(text: &str, element: &Element, value: &str) -> String {
     let source = &text[element.range.clone()];
     let escaped = escape_text(value);
     if source.ends_with("/>") {
-        let start_tag = &source[..source.len() - 2];
+        let start_tag = source.strip_suffix("/>").unwrap_or(source);
         return format!("{}>{escaped}</{}>", start_tag.trim_end(), element.qname);
     }
     let open_end = source.find('>').map(|i| i + 1).unwrap_or(source.len());
