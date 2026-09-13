@@ -90,3 +90,9 @@ Go is a build-time dependency only. `crates/epubsync-core/build.rs` compiles
 the shim in `kepub-shim/` with `go build -buildmode=c-archive` and links it
 statically. The shim's dependencies are vendored, so no build needs the
 network.
+
+## Release
+
+`just release 0.1.2` bumps the version, commits, tags, pushes, and points
+the Homebrew formula at the new tag. It expects the tap checkout at
+`../homebrew-tap`, or pass `TAP=<path>`.

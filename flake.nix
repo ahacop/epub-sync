@@ -44,7 +44,7 @@
 
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          packages = with pkgs; [ rustc cargo rust-analyzer clippy rustfmt go sqlite ];
+          packages = with pkgs; [ rustc cargo rust-analyzer clippy rustfmt go sqlite just ];
         };
       });
     };
