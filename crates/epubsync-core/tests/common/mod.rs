@@ -240,3 +240,19 @@ pub const ALL_OPFS: &[(&str, &str)] = &[
     ("two-titles", TWO_TITLES_OPF),
     ("bare", BARE_OPF),
 ];
+
+/// Flips a byte inside the compressed data of the named entry, so reading
+/// that entry fails its CRC or its inflate.
+pub fn corrupt_entry(path: &Path, name: &str) {
+    let mut bytes = std::fs::read(path).unwrap();
+    let name_at = bytes
+        .windows(name.len())
+        .position(|w| w == name.as_bytes())
+        .unwrap();
+    let header = name_at - 30;
+    assert_eq!(&bytes[header..header + 4], b"PK\x03\x04");
+    let extra_len = u16::from_le_bytes([bytes[header + 28], bytes[header + 29]]) as usize;
+    let data = name_at + name.len() + extra_len;
+    bytes[data + 5] ^= 0xFF;
+    std::fs::write(path, bytes).unwrap();
+}
