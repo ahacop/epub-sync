@@ -1,33 +1,46 @@
-//! The library viewer: a window with the book list on the left and the
-//! selected book on the right. It is read-only. The CLI imports, edits,
-//! removes, and syncs.
+//! The library viewer: a window with a table of books and, when a book is
+//! selected, its details in a pane on the right. It is read-only. The CLI
+//! imports, edits, removes, and syncs.
 
 mod description;
+mod format;
 mod read;
+mod table;
 mod theme;
 
+use std::path::PathBuf;
+
 use epubsync_core::config;
-use epubsync_core::library::{Book, Library, ProgressRow};
-use epubsync_core::metadata::{Series, format_series_number};
-use iced::widget::{button, column, container, markdown, row, scrollable, text};
-use iced::{Element, Fill, Length, Theme};
+use epubsync_core::library::{Library, ProgressRow};
+use iced::widget::{column, container, markdown, row, scrollable, space, text, text_input};
+use iced::{Center, Element, Fill, Theme, padding};
 
 use crate::read::Entry;
+use crate::table::{Column, Sort};
+use crate::theme::{BODY, MONO, SANS_SEMIBOLD};
 
 /// The state of the viewer window: what it draws.
 #[derive(Debug, Clone)]
 enum Viewer {
     /// The library could not be opened. The window shows the error text.
     OpenFailed(String),
-    /// The library is open. The window shows the two panes.
-    Open {
-        /// The books in id order.
-        books: Vec<Entry>,
-        /// Reading progress, one row per book per device.
-        progress: Vec<ProgressRow>,
-        /// The book in the right pane, if any.
-        selected: Option<Selected>,
-    },
+    /// The library is open. The window shows the table.
+    Open(Open),
+}
+
+#[derive(Debug, Clone)]
+struct Open {
+    /// The library folder. The status bar shows it.
+    folder: PathBuf,
+    /// The books in id order. The table sorts a borrowed view.
+    books: Vec<Entry>,
+    /// Reading progress, one row per book per device.
+    progress: Vec<ProgressRow>,
+    sort: Sort,
+    /// The filter field's text.
+    filter: String,
+    /// The book in the right pane, if any.
+    selected: Option<Selected>,
 }
 
 /// The book in the right pane.
@@ -40,8 +53,12 @@ struct Selected {
 
 #[derive(Debug, Clone)]
 enum Message {
-    /// A click on a book in the list.
+    /// A click on a row.
     Select(i64),
+    /// A click on a column header.
+    Sort(Column),
+    /// A change to the filter field.
+    Filter(String),
     /// A click on a link in the description. It does nothing.
     LinkClicked,
 }
@@ -69,36 +86,46 @@ fn open() -> anyhow::Result<(Library, Viewer)> {
     let config = config::load()?;
     let library = Library::open(&config)?;
     let (books, progress) = read::lists(&library)?;
-    Ok((
-        library,
-        Viewer::Open {
-            books,
-            progress,
-            selected: None,
-        },
-    ))
+    let open = Open {
+        folder: library.folder.clone(),
+        books,
+        progress,
+        sort: Sort::default(),
+        filter: String::new(),
+        selected: None,
+    };
+    Ok((library, Viewer::Open(open)))
 }
 
 fn update(viewer: &mut Viewer, message: Message) {
-    let Viewer::Open {
-        books, selected, ..
-    } = viewer
-    else {
+    let Viewer::Open(open) = viewer else {
         return;
     };
     match message {
         Message::Select(id) => {
             // The description is parsed only when the book is shown.
-            let html = books
+            let html = open
+                .books
                 .iter()
                 .find(|e| e.book.id == id)
                 .and_then(|e| e.book.metadata.description.as_deref())
                 .unwrap_or("");
-            *selected = Some(Selected {
+            open.selected = Some(Selected {
                 id,
                 description: description::parse(html),
             });
         }
+        Message::Sort(column) => {
+            if open.sort.column == column {
+                open.sort.descending = !open.sort.descending;
+            } else {
+                open.sort = Sort {
+                    column,
+                    descending: false,
+                };
+            }
+        }
+        Message::Filter(text) => open.filter = text,
         Message::LinkClicked => {}
     }
 }
@@ -106,41 +133,89 @@ fn update(viewer: &mut Viewer, message: Message) {
 fn view(viewer: &Viewer) -> Element<'_, Message> {
     match viewer {
         Viewer::OpenFailed(error) => container(text(error)).padding(16).into(),
-        Viewer::Open {
-            books,
-            progress,
-            selected,
-        } => {
-            let shown = selected.as_ref().and_then(|s| {
-                let entry = books.iter().find(|e| e.book.id == s.id)?;
+        Viewer::Open(open) => {
+            let rows = table::order(open);
+            let shown = open.selected.as_ref().and_then(|s| {
+                let entry = open.books.iter().find(|e| e.book.id == s.id)?;
                 Some((entry, s))
             });
-            let selected_id = selected.as_ref().map(|s| s.id);
-            row![book_list(books, selected_id), book_pane(shown, progress)].into()
+            let main =
+                row![table::view(open, &rows), book_pane(shown, &open.progress)].height(Fill);
+            column![toolbar(open, rows.len()), main, status_bar(open)].into()
         }
     }
 }
 
-/// The left pane: one button per book. The selected book's button is
-/// filled; the others are plain text.
-fn book_list(books: &[Entry], selected_id: Option<i64>) -> Element<'_, Message> {
-    let buttons = books.iter().map(|entry| {
-        let book = &entry.book;
-        let label = column![text(&book.metadata.title), text(byline(book))].spacing(2);
-        let style = if Some(book.id) == selected_id {
-            button::primary
-        } else {
-            button::text
-        };
-        button(label)
-            .on_press(Message::Select(book.id))
-            .width(Fill)
-            .style(style)
-            .into()
-    });
-    scrollable(column(buttons).spacing(2).padding(8))
-        .width(Length::FillPortion(2))
-        .into()
+/// "1 book" or "23 books".
+fn books(n: usize) -> String {
+    if n == 1 {
+        "1 book".to_string()
+    } else {
+        format!("{n} books")
+    }
+}
+
+/// The toolbar: the title, the count, and the filter field. The count
+/// reads "4 of 23 books" while the filter is set.
+fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
+    let total = open.books.len();
+    let count = if open.filter.trim().is_empty() {
+        books(total)
+    } else {
+        format!("{shown} of {}", books(total))
+    };
+    let filter = text_input("Filter by title, author, or series", &open.filter)
+        .on_input(Message::Filter)
+        .width(300)
+        .size(13)
+        .padding([5, 10])
+        .style(theme::filter);
+    let bar = row![
+        text("Library").size(14).font(SANS_SEMIBOLD),
+        text(count).size(BODY).style(theme::text_color(|c| c.muted)),
+        space().width(Fill),
+        filter,
+    ]
+    .spacing(14)
+    .align_y(Center)
+    .height(46)
+    .padding(padding::horizontal(14));
+    column![bar, theme::hline()].into()
+}
+
+/// The status bar: the count, how many books are reading and finished,
+/// and the library folder.
+fn status_bar(open: &Open) -> Element<'_, Message> {
+    let has_status = |status: i64| {
+        open.books
+            .iter()
+            .filter(|e| {
+                open.progress
+                    .iter()
+                    .any(|p| p.book_id == e.book.id && p.status == status)
+            })
+            .count()
+    };
+    let counts = format!("{} reading · {} finished", has_status(1), has_status(2));
+    let bar = row![
+        text(books(open.books.len()))
+            .size(11.5)
+            .style(theme::text_color(|c| c.muted)),
+        text(counts)
+            .size(11.5)
+            .style(theme::text_color(|c| c.muted)),
+        space().width(Fill),
+        text(open.folder.display().to_string())
+            .font(MONO)
+            .size(11)
+            .wrapping(text::Wrapping::None)
+            .style(theme::text_color(|c| c.muted)),
+    ]
+    .spacing(18)
+    .align_y(Center)
+    .height(28)
+    .padding(padding::horizontal(14));
+    column![theme::hline(), bar].into()
 }
 
 /// The right pane: the selected book's metadata, its description, its
@@ -150,17 +225,14 @@ fn book_pane<'a>(
     progress: &'a [ProgressRow],
 ) -> Element<'a, Message> {
     let Some((entry, selected)) = shown else {
-        return container(text("Select a book"))
-            .width(Length::FillPortion(3))
-            .padding(16)
-            .into();
+        return space().into();
     };
     let book = &entry.book;
     let m = &book.metadata;
     let mut lines = column![text(&m.title).size(24)].spacing(8);
-    lines = lines.push(text(authors(book)));
+    lines = lines.push(text(format::authors(&m.authors)));
     if let Some(series) = &m.series {
-        lines = lines.push(text(series_tag(series)));
+        lines = lines.push(text(format::series_tag(series)));
     }
     if let Some(publisher) = &m.publisher {
         lines = lines.push(text(publisher));
@@ -168,59 +240,22 @@ fn book_pane<'a>(
     lines = lines
         .push(markdown::view(&selected.description, Theme::Light).map(|_uri| Message::LinkClicked));
     for p in progress.iter().filter(|p| p.book_id == book.id) {
-        lines = lines.push(text(progress_cell(p)));
+        lines = lines.push(text(progress_line(p)));
     }
     lines = lines.push(text(format!("{}  {}", book.id, entry.path.display())));
-    scrollable(lines.padding(16))
-        .width(Length::FillPortion(3))
-        .into()
-}
-
-/// The authors joined with " & ".
-fn authors(book: &Book) -> String {
-    let authors: Vec<&str> = book
-        .metadata
-        .authors
-        .iter()
-        .map(|a| a.name.as_str())
-        .collect();
-    authors.join(" & ")
-}
-
-/// The authors, then the series in square brackets, the way
-/// `epubsync list` prints them.
-fn byline(book: &Book) -> String {
-    let mut line = authors(book);
-    if let Some(series) = &book.metadata.series {
-        line.push_str("  ");
-        line.push_str(&series_tag(series));
-    }
-    line
-}
-
-/// The series name and number as "[Name #1]".
-fn series_tag(series: &Series) -> String {
-    match series.number {
-        Some(n) => format!("[{} #{}]", series.name, format_series_number(n)),
-        None => format!("[{}]", series.name),
-    }
+    scrollable(lines.padding(16)).width(360).into()
 }
 
 /// One device's progress: the serial, the percent, the status, and the
 /// day last read, formatted as `epubsync list` prints it.
-fn progress_cell(p: &ProgressRow) -> String {
-    let status = match p.status {
-        0 => "unread",
-        1 => "reading",
-        2 => "finished",
-        _ => "status ?",
-    };
-    let day = p
-        .last_read
-        .as_deref()
-        .map(|d| &d[..d.len().min(10)])
-        .unwrap_or("");
-    format!("{}: {}% {status} {day}", p.device_serial, p.percent)
-        .trim_end()
-        .to_string()
+fn progress_line(p: &ProgressRow) -> String {
+    let day = table::day_of(p).unwrap_or("");
+    format!(
+        "{}: {}% {} {day}",
+        p.device_serial,
+        p.percent,
+        format::status(p.status)
+    )
+    .trim_end()
+    .to_string()
 }
