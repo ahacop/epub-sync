@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use epubsync_core::config::{self, Config};
 use epubsync_core::device::{Action, Device, RowUpdate};
+use epubsync_core::kobo::eject::Ejected;
 use epubsync_core::kobo::{self, Kobo};
 use epubsync_core::library::{Book, ImportOutcome, Library, ProgressRow};
 use epubsync_core::metadata::{Author, Metadata, Series, format_series_number};
@@ -77,6 +78,12 @@ enum Command {
         /// Run the deletes without asking
         #[arg(long, short = 'y')]
         yes: bool,
+    },
+    /// Unmount the Kobo and tell it the USB session is over
+    Eject {
+        /// The mounted device volume, instead of scanning the usual mount folders
+        #[arg(long)]
+        device: Option<PathBuf>,
     },
     /// List the words looked up on the device, newest first
     Words {
@@ -149,6 +156,10 @@ fn run(command: Command) -> Result<()> {
             },
         ),
         Command::Words { book, device } => words(&config, book, device.as_deref()),
+        Command::Eject { device } => {
+            let kobo = find_kobo(device.as_deref())?;
+            eject(&kobo)
+        }
     }
 }
 
@@ -508,7 +519,38 @@ fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
         println!("{} new word(s)", back.words.len());
     }
     kobo.finish()?;
-    println!("eject the device now");
+    eject(&kobo)
+}
+
+fn find_kobo(device: Option<&Path>) -> Result<Kobo> {
+    match device {
+        Some(path) => Kobo::at(path),
+        None => {
+            let mut found = kobo::detect(&kobo::default_roots());
+            match found.len() {
+                0 => bail!("no Kobo found. Plug it in, or pass --device <path>"),
+                1 => Ok(found.remove(0)),
+                _ => {
+                    let roots: Vec<String> =
+                        found.iter().map(|k| k.root.display().to_string()).collect();
+                    bail!(
+                        "more than one Kobo found: {}. Pass --device <path>",
+                        roots.join(", ")
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn eject(kobo: &Kobo) -> Result<()> {
+    match kobo.eject()? {
+        Ejected::Yes => println!("ejected, unplug the device"),
+        Ejected::NotAVolume => println!(
+            "{} is a folder, not a mounted volume; nothing to eject",
+            kobo.root.display()
+        ),
+    }
     Ok(())
 }
 

@@ -33,6 +33,7 @@ epubsync edit 3 --title "New Title" # set one field without the editor
 epubsync remove 3                   # delete the file and its rows
 epubsync sync                       # make the Kobo's EpubSync folder match the library
 epubsync sync --dry-run             # print the plan and change nothing
+epubsync eject                      # unmount the Kobo and end the USB session
 epubsync words                      # words looked up on the Kobo, newest first
 ```
 
@@ -64,18 +65,14 @@ and says so. `--allow-newer-firmware` runs them anyway.
 
 ## Eject
 
-The app does not eject the volume. When sync prints "eject the device now",
-eject it before you pull the cable, or the Kobo database can be left
-corrupt. On Linux the volume needs both an unmount and a SCSI eject, or the
-Kobo keeps showing "connected":
+`sync` ends by ejecting the Kobo, and `epubsync eject` does it on its own.
+An eject is an unmount plus the SCSI eject that ends the USB session; after
+a plain unmount the Kobo keeps showing "connected". Pull the cable only
+after the eject, or the Kobo database can be left corrupt.
 
-```sh
-udisksctl unmount -b /dev/sdX && udisksctl power-off -b /dev/sdX
-# or, without udisks:
-sudo umount /run/media/$USER/KOBOeReader && sudo eject /dev/sdX
-```
-
-On macOS, eject the volume in Finder or run `diskutil eject KOBOeReader`.
+On Linux the eject goes through udisks2 over D-Bus, so udisks2 must be
+running, and polkit decides whether your session may unmount and eject. A
+logged-in local user may by default. On macOS it runs `diskutil eject`.
 
 ## Build
 

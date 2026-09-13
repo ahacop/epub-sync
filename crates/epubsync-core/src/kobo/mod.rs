@@ -4,6 +4,7 @@
 //! updates and the read back.
 
 pub mod db;
+pub mod eject;
 
 use std::path::{Path, PathBuf};
 
@@ -105,6 +106,12 @@ impl Kobo {
     /// The path the firmware keys the book's rows by.
     pub fn volume_id(&self, id: i64) -> String {
         format!("file:///mnt/onboard/{FOLDER}/{id}.kepub.epub")
+    }
+
+    /// Unmounts the volume and tells the Kobo the session is over. Call
+    /// after `finish`, so the database is closed first.
+    pub fn eject(&self) -> Result<eject::Ejected> {
+        eject::eject(&self.root)
     }
 }
 

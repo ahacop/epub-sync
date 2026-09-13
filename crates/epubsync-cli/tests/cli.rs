@@ -244,7 +244,9 @@ fn syncs_to_a_folder_that_looks_like_a_kobo() {
         .success()
         .stdout(predicate::str::contains("sending 1"))
         .stdout(predicate::str::contains("deleting 42"))
-        .stdout(predicate::str::contains("eject the device now"));
+        .stdout(predicate::str::contains(
+            "not a mounted volume; nothing to eject",
+        ));
     assert!(kobo.join("EpubSync/1.kepub.epub").exists());
     assert!(!kobo.join("EpubSync/42.kepub.epub").exists());
 
