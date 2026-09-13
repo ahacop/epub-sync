@@ -1,3 +1,18 @@
+# Run the library viewer.
+#
+#     just app
+#
+# Outside the dev shell the recipe runs itself inside `nix develop`, which
+# has cargo and puts the window libraries on LD_LIBRARY_PATH.
+
+app:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cargo >/dev/null; then
+        exec nix develop --command just app
+    fi
+    cargo run -p epubsync-app
+
 # Cut a release: bump the version, tag, push, and update the Homebrew tap.
 #
 #     just release 0.1.2
