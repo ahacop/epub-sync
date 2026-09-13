@@ -20,6 +20,8 @@ jobs:
         run: nix develop -c cargo test --locked
       - name: Build the package
         run: nix build --print-build-logs
+      - name: Build the viewer package
+        run: nix build .#app --print-build-logs
       - name: Build the CLI
         run: nix develop -c cargo build --locked -p epubsync-cli
       - name: Check that the binary links no Go or kepubify shared library

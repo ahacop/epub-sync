@@ -45,6 +45,20 @@ holds the folder path and lives in the XDG config directory.
 `edit` flags: `--title`, `--publisher`, `--description`, `--author "Name|Sort"`
 (repeat for several authors), `--series`, and `--series-number`.
 
+## Viewer
+
+The viewer is a window that shows the library: the book list on the left,
+and the selected book on the right with its title, authors, series,
+publisher, description, reading progress per device, id, and file path. It
+is read-only. The CLI stays the way to import, edit, remove, and sync.
+
+```sh
+nix run github:ahacop/epub-sync#app
+```
+
+The viewer holds the library while its window is open, so a CLI command
+fails with "another EpubSync is running" until the window closes.
+
 ## Sync
 
 `sync` finds the Kobo under `/run/media/$USER`, `/media`, `/media/$USER`, or
