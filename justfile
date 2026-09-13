@@ -36,20 +36,21 @@ release version:
     git push -q origin main "v$version"
     echo "pushed v$version"
 
-    # 3. Hash the tag tarball. GitHub can take a moment to serve a new tag.
-    url="https://github.com/ahacop/epub-sync/archive/refs/tags/v$version.tar.gz"
+    # 3. Wait for the release workflow to publish the macOS tarball.
+    #    The build takes several minutes.
+    echo "waiting for the release workflow: https://github.com/ahacop/epub-sync/actions"
     sha=""
-    for _ in $(seq 1 10); do
-        sha=$(curl -sfL "$url" | sha256sum | cut -d' ' -f1) && [ ${#sha} -eq 64 ] && break
-        sleep 3
+    for _ in $(seq 1 90); do
+        sha=$(gh release download "v$version" --repo ahacop/epub-sync --pattern SHA256SUMS --output - 2>/dev/null | cut -d' ' -f1) && [ ${#sha} -eq 64 ] && break
+        sleep 20
     done
-    [ ${#sha} -eq 64 ] || { echo "could not fetch $url"; exit 1; }
+    [ ${#sha} -eq 64 ] || { echo "no SHA256SUMS on release v$version"; exit 1; }
 
     # 4. Point the formula at the new tarball and push the tap.
+    formula="$tap/Formula/epubsync.rb"
     git -C "$tap" pull -q --ff-only
-    sed -i "s|tags/v.*\.tar\.gz|tags/v$version.tar.gz|; s|sha256 \"[0-9a-f]*\"|sha256 \"$sha\"|" "$tap/Formula/epubsync.rb"
+    sed -i "s|^  version \".*\"|  version \"$version\"|; s|sha256 \"[0-9a-f]*\"|sha256 \"$sha\"|" "$formula"
     git -C "$tap" add Formula/epubsync.rb
     git -C "$tap" commit -q -m "epubsync $version"
     git -C "$tap" push -q
     echo "tap updated to $version"
-    echo "CI: https://github.com/ahacop/epub-sync/actions"

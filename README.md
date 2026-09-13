@@ -19,8 +19,9 @@ With Homebrew:
 brew install ahacop/tap/epubsync
 ```
 
-Both build the binary from source with Rust and Go. The installed program is
-one file and needs no other program on `PATH`.
+Nix builds the binary from source with Rust and Go. Homebrew downloads a
+prebuilt Apple Silicon binary from the GitHub Release for the tag. The
+installed program is one file and needs no other program on `PATH`.
 
 ## Commands
 
@@ -92,6 +93,8 @@ network.
 
 ## Release
 
-`just release 0.1.2` bumps the version, commits, tags, pushes, and points
-the Homebrew formula at the new tag. It expects the tap checkout at
+`just release 0.1.2` bumps the version, commits, tags, and pushes. The
+release workflow builds the CLI for Apple Silicon and attaches the tarball to
+a GitHub Release. The recipe then waits for that release and points the
+Homebrew formula at the new tarball. It expects the tap checkout at
 `../homebrew-tap`, or pass `TAP=<path>`.
