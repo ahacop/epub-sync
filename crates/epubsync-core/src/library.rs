@@ -124,7 +124,7 @@ impl Library {
         let is_kepub = source
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with(".kepub.epub"));
+            .is_some_and(|n| n.ends_with(".kepub.epub") || n.ends_with(".kepub"));
         let result = if is_kepub {
             std::fs::copy(source, &temp)
                 .map(|_| ())

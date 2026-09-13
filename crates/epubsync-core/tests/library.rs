@@ -181,6 +181,17 @@ fn copies_a_kepub_without_converting() {
         std::fs::read(lib.book_path(id)).unwrap(),
         std::fs::read(&source).unwrap()
     );
+
+    // A file named .kepub, as some publishers ship Kobo builds, is a KEPUB too.
+    let other = common::EPUB2_OPF.replace("The Left Hand of Darkness", "The Dispossessed");
+    let source = common::write_epub(&s.root, "other.kepub", &other);
+    let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    assert_eq!(
+        std::fs::read(lib.book_path(id)).unwrap(),
+        std::fs::read(&source).unwrap()
+    );
 }
 
 #[test]
