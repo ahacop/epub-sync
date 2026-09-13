@@ -1,0 +1,17 @@
+[package]
+name = "epubsync-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "EpubSync library viewer"
+
+[[bin]]
+name = "epubsync-app"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+epubsync-core = { path = "../epubsync-core" }
+htmd = "0.5.5"
+iced = { version = "0.14.0", features = ["markdown"] }

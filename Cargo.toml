@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/epubsync-core", "crates/epubsync-cli"]
+members = ["crates/epubsync-core", "crates/epubsync-cli", "crates/epubsync-app"]
 
 [workspace.package]
 version = "0.1.4"
