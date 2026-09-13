@@ -16,7 +16,7 @@
         {
           default = pkgs.rustPlatform.buildRustPackage {
             pname = "epubsync";
-            version = "0.1.0";
+            version = "0.1.1";
             src = fs.toSource {
               root = ./.;
               fileset = fs.unions [ ./Cargo.toml ./Cargo.lock ./crates ./kepub-shim ];
