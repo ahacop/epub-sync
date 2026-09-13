@@ -14,6 +14,7 @@ path = "src/main.rs"
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 epubsync-core = { path = "../epubsync-core" }
+libc = "0.2.189"
 tempfile = "3.27.0"
 toml = "1.1.6"
 

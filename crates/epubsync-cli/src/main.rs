@@ -89,6 +89,9 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // Let a closed pipe end the process quietly, as in `list | head`,
+    // instead of a panic on the next print.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     let cli = Cli::parse();
     match run(cli.command) {
         Ok(()) => ExitCode::SUCCESS,

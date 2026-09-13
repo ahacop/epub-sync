@@ -246,6 +246,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "epubsync-core",
+ "libc",
  "predicates",
  "rusqlite",
  "tempfile",
