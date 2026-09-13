@@ -47,10 +47,12 @@ holds the folder path and lives in the XDG config directory.
 
 ## Viewer
 
-The viewer is a window that shows the library: the book list on the left,
-and the selected book on the right with its title, authors, series,
-publisher, description, reading progress per device, id, and file path. It
-is read-only. The CLI stays the way to import, edit, remove, and sync.
+The viewer is a window that shows the library as a table with sortable
+columns and a filter. A click on a column header sorts by that column, and
+the filter field narrows the table by title, author, or series. A click on
+a row opens the book's details in a sidebar: its title, authors, series,
+publisher, description, reading progress per device, and file path. It is
+read-only. The CLI stays the way to import, edit, remove, and sync.
 
 ```sh
 nix run github:ahacop/epub-sync#app

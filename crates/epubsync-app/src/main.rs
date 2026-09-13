@@ -1,8 +1,9 @@
 //! The library viewer: a window with a table of books and, when a book is
-//! selected, its details in a pane on the right. It is read-only. The CLI
-//! imports, edits, removes, and syncs.
+//! selected, its details in a sidebar on the right. It is read-only. The
+//! CLI imports, edits, removes, and syncs.
 
 mod description;
+mod detail;
 mod format;
 mod read;
 mod table;
@@ -12,8 +13,9 @@ use std::path::PathBuf;
 
 use epubsync_core::config;
 use epubsync_core::library::{Library, ProgressRow};
-use iced::widget::{column, container, markdown, row, scrollable, space, text, text_input};
-use iced::{Center, Element, Fill, Theme, padding};
+use iced::keyboard::{self, key};
+use iced::widget::{column, container, markdown, row, space, text, text_input};
+use iced::{Center, Element, Fill, Subscription, padding};
 
 use crate::read::Entry;
 use crate::table::{Column, Sort};
@@ -24,7 +26,8 @@ use crate::theme::{BODY, MONO, SANS_SEMIBOLD};
 enum Viewer {
     /// The library could not be opened. The window shows the error text.
     OpenFailed(String),
-    /// The library is open. The window shows the table.
+    /// The library is open. The window shows the table and, when a book
+    /// is selected, the sidebar.
     Open(Open),
 }
 
@@ -39,11 +42,11 @@ struct Open {
     sort: Sort,
     /// The filter field's text.
     filter: String,
-    /// The book in the right pane, if any.
+    /// The book in the sidebar, if any.
     selected: Option<Selected>,
 }
 
-/// The book in the right pane.
+/// The book in the sidebar.
 #[derive(Debug, Clone)]
 struct Selected {
     id: i64,
@@ -55,6 +58,8 @@ struct Selected {
 enum Message {
     /// A click on a row.
     Select(i64),
+    /// The sidebar's close button, or the Escape key.
+    Close,
     /// A click on a column header.
     Sort(Column),
     /// A change to the filter field.
@@ -79,7 +84,20 @@ fn main() -> iced::Result {
         .font(include_bytes!("../fonts/newsreader/Newsreader-Italic[opsz,wght].ttf").as_slice())
         .font(include_bytes!("../fonts/jetbrains-mono/JetBrainsMono[wght].ttf").as_slice())
         .style(|_viewer, theme| theme::window(theme))
+        .subscription(subscription)
         .run()
+}
+
+/// Escape closes the sidebar. The filter field takes Escape first while
+/// it has focus, to drop the focus.
+fn subscription(_viewer: &Viewer) -> Subscription<Message> {
+    keyboard::listen().filter_map(|event| match event {
+        keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(key::Named::Escape),
+            ..
+        } => Some(Message::Close),
+        _ => None,
+    })
 }
 
 fn open() -> anyhow::Result<(Library, Viewer)> {
@@ -115,6 +133,7 @@ fn update(viewer: &mut Viewer, message: Message) {
                 description: description::parse(html),
             });
         }
+        Message::Close => open.selected = None,
         Message::Sort(column) => {
             if open.sort.column == column {
                 open.sort.descending = !open.sort.descending;
@@ -139,8 +158,10 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
                 let entry = open.books.iter().find(|e| e.book.id == s.id)?;
                 Some((entry, s))
             });
-            let main =
-                row![table::view(open, &rows), book_pane(shown, &open.progress)].height(Fill);
+            let mut main = row![table::view(open, &rows)].height(Fill);
+            if let Some((entry, selected)) = shown {
+                main = main.push(detail::view(entry, selected, &open.progress));
+            }
             column![toolbar(open, rows.len()), main, status_bar(open)].into()
         }
     }
@@ -216,46 +237,4 @@ fn status_bar(open: &Open) -> Element<'_, Message> {
     .height(28)
     .padding(padding::horizontal(14));
     column![theme::hline(), bar].into()
-}
-
-/// The right pane: the selected book's metadata, its description, its
-/// progress on each device, and its id and file path.
-fn book_pane<'a>(
-    shown: Option<(&'a Entry, &'a Selected)>,
-    progress: &'a [ProgressRow],
-) -> Element<'a, Message> {
-    let Some((entry, selected)) = shown else {
-        return space().into();
-    };
-    let book = &entry.book;
-    let m = &book.metadata;
-    let mut lines = column![text(&m.title).size(24)].spacing(8);
-    lines = lines.push(text(format::authors(&m.authors)));
-    if let Some(series) = &m.series {
-        lines = lines.push(text(format::series_tag(series)));
-    }
-    if let Some(publisher) = &m.publisher {
-        lines = lines.push(text(publisher));
-    }
-    lines = lines
-        .push(markdown::view(&selected.description, Theme::Light).map(|_uri| Message::LinkClicked));
-    for p in progress.iter().filter(|p| p.book_id == book.id) {
-        lines = lines.push(text(progress_line(p)));
-    }
-    lines = lines.push(text(format!("{}  {}", book.id, entry.path.display())));
-    scrollable(lines.padding(16)).width(360).into()
-}
-
-/// One device's progress: the serial, the percent, the status, and the
-/// day last read, formatted as `epubsync list` prints it.
-fn progress_line(p: &ProgressRow) -> String {
-    let day = table::day_of(p).unwrap_or("");
-    format!(
-        "{}: {}% {} {day}",
-        p.device_serial,
-        p.percent,
-        format::status(p.status)
-    )
-    .trim_end()
-    .to_string()
 }
