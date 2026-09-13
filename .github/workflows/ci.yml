@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: DeterminateSystems/magic-nix-cache-action@v9
+      - name: Test
+        run: nix develop -c cargo test --locked
+      - name: Build the CLI
+        run: nix develop -c cargo build --locked -p epubsync-cli
+      - name: Check that the binary links no Go or kepubify shared library
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            otool -L target/debug/epubsync
+            ! otool -L target/debug/epubsync | grep -iE 'kepub|libgo'
+          else
+            ldd target/debug/epubsync
+            ! ldd target/debug/epubsync | grep -iE 'kepub|libgo'
+          fi
