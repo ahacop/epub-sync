@@ -197,3 +197,60 @@ fn edits_through_the_editor() {
             "    1  Winter  by Ursula K. Le Guin",
         ));
 }
+
+#[test]
+fn syncs_to_a_folder_that_looks_like_a_kobo() {
+    let env = Env::new();
+    env.init();
+    let epub = write_epub(env.dir.path(), "lhod.epub", OPF);
+    env.cmd()
+        .args(["import", epub.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let kobo = env.dir.path().join("KOBOeReader");
+    std::fs::create_dir_all(kobo.join(".kobo")).unwrap();
+    std::fs::write(
+        kobo.join(".kobo/version"),
+        "N4181A,3.0.35,4.38.23171,3.0.35,3.0.35,0\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(kobo.join("EpubSync")).unwrap();
+    std::fs::write(kobo.join("EpubSync/42.kepub.epub"), b"stale").unwrap();
+
+    env.cmd()
+        .args(["sync", "--device", kobo.to_str().unwrap(), "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Kobo N4181A at"))
+        .stdout(predicate::str::contains(
+            "send            1  The Left Hand of Darkness",
+        ))
+        .stdout(predicate::str::contains(
+            "delete         42  (no longer in the library)",
+        ))
+        .stdout(predicate::str::contains("eject").not());
+    assert!(!kobo.join("EpubSync/1.kepub.epub").exists());
+
+    env.cmd()
+        .args(["sync", "--device", kobo.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--yes"));
+
+    env.cmd()
+        .args(["sync", "--device", kobo.to_str().unwrap(), "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sending 1"))
+        .stdout(predicate::str::contains("deleting 42"))
+        .stdout(predicate::str::contains("eject the device now"));
+    assert!(kobo.join("EpubSync/1.kepub.epub").exists());
+    assert!(!kobo.join("EpubSync/42.kepub.epub").exists());
+
+    env.cmd()
+        .args(["sync", "--device", kobo.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to do"));
+}

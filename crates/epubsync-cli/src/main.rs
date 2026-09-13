@@ -8,9 +8,12 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use epubsync_core::config::{self, Config};
+use epubsync_core::device::{Action, Device};
+use epubsync_core::kobo::{self, Kobo};
 use epubsync_core::library::{Book, ImportOutcome, Library};
 use epubsync_core::metadata::{Author, Metadata, Series, format_series_number};
 use epubsync_core::sort_name::sort_name;
+use epubsync_core::sync as core_sync;
 
 #[derive(Parser)]
 #[command(
@@ -71,6 +74,9 @@ enum Command {
         /// Write to the Kobo database on a firmware version the app has not been tested with
         #[arg(long)]
         allow_newer_firmware: bool,
+        /// Run the deletes without asking
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
     /// List the words looked up on the device, newest first
     Words {
@@ -125,7 +131,20 @@ fn run(command: Command) -> Result<()> {
             edit(&config, book, flags)
         }
         Command::Remove { book, yes } => remove(&config, book, yes),
-        Command::Sync { .. } => bail!("sync is not implemented yet"),
+        Command::Sync {
+            dry_run,
+            device,
+            allow_newer_firmware,
+            yes,
+        } => sync(
+            &config,
+            SyncFlags {
+                dry_run,
+                device,
+                allow_newer_firmware,
+                yes,
+            },
+        ),
         Command::Words { .. } => bail!("words is not implemented yet"),
     }
 }
@@ -341,4 +360,97 @@ fn remove(config: &Config, id: i64, yes: bool) -> Result<()> {
     lib.remove(id)?;
     println!("removed {} \"{}\"", book.id, book.metadata.title);
     Ok(())
+}
+
+struct SyncFlags {
+    dry_run: bool,
+    device: Option<PathBuf>,
+    #[allow(dead_code)]
+    allow_newer_firmware: bool,
+    yes: bool,
+}
+
+fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
+    let mut lib = Library::open(config)?;
+    let mut kobo = match &flags.device {
+        Some(path) => Kobo::at(path)?,
+        None => {
+            let mut found = kobo::detect(&kobo::default_roots());
+            match found.len() {
+                0 => bail!("no Kobo found. Plug it in, or pass --device <path>"),
+                1 => found.remove(0),
+                _ => {
+                    let roots: Vec<String> =
+                        found.iter().map(|k| k.root.display().to_string()).collect();
+                    bail!(
+                        "more than one Kobo found: {}. Pass --device <path>",
+                        roots.join(", ")
+                    );
+                }
+            }
+        }
+    };
+    println!("Kobo {} at {}", kobo.serial(), kobo.root.display());
+
+    let mut actions = core_sync::plan(&lib, &kobo)?;
+    if actions.is_empty() {
+        println!("nothing to do");
+    }
+    for action in &actions {
+        println!("{}", action_line(&lib, action)?);
+    }
+    if flags.dry_run {
+        return Ok(());
+    }
+
+    let deletes = actions
+        .iter()
+        .filter(|a| matches!(a, Action::Delete { .. }))
+        .count();
+    if deletes > 0 && !flags.yes {
+        if !std::io::stdin().is_terminal() {
+            bail!("pass --yes to run the deletes without a prompt");
+        }
+        print!("delete {deletes} file(s) from the device? [y/N] ");
+        std::io::stdout().flush()?;
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            println!("deletes skipped");
+            actions.retain(|a| !matches!(a, Action::Delete { .. }));
+        }
+    }
+
+    core_sync::apply(&mut lib, &mut kobo, &actions, |a| {
+        let verb = match a {
+            Action::Send { .. } => "sending",
+            Action::Replace { .. } => "replacing",
+            Action::SendAgain { .. } => "sending again",
+            Action::Delete { .. } => "deleting",
+        };
+        println!("{verb} {}", a.id());
+    })?;
+
+    let back = core_sync::read_back(&mut lib, &mut kobo)?;
+    if !back.progress.is_empty() {
+        println!("read progress for {} book(s)", back.progress.len());
+    }
+    if !back.words.is_empty() {
+        println!("{} new word(s)", back.words.len());
+    }
+    kobo.finish()?;
+    println!("eject the device now");
+    Ok(())
+}
+
+fn action_line(lib: &Library, action: &Action) -> Result<String> {
+    let title = |id: i64| -> String { lib.get(id).map(|b| b.metadata.title).unwrap_or_default() };
+    Ok(match action {
+        Action::Send { id, .. } => format!("send        {id:>5}  {}", title(*id)),
+        Action::Replace { id, .. } => format!("replace     {id:>5}  {}", title(*id)),
+        Action::SendAgain { id, .. } => {
+            format!("send again  {id:>5}  {}  (deleted on device)", title(*id))
+        }
+        Action::Delete { id } => format!("delete      {id:>5}  (no longer in the library)"),
+    })
 }
