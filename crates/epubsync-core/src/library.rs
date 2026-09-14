@@ -6,7 +6,8 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite_migration::{HookResult, M, Migrations};
 
 use crate::config::{self, Config};
 use crate::device::ReadStatus;
@@ -14,10 +15,8 @@ use crate::metadata::{Author, Metadata, Series};
 use crate::sort_name::sort_name;
 use crate::{epub, kepub, opf, splice};
 
-const SCHEMA: &str = include_str!("schema.sql");
-/// The `user_version` that `schema.sql` sets. A database below it gets
-/// the missing tables added when it is opened.
-const SCHEMA_VERSION: i64 = 1;
+const TABLES_SQL: &str = include_str!("migrations/1-tables.sql");
+const BOOK_STATS_SQL: &str = include_str!("migrations/2-book-stats.sql");
 const DB_NAME: &str = "library.sqlite";
 const LOCK_NAME: &str = "lock";
 const IMPORT_TEMP: &str = "import.tmp";
@@ -71,27 +70,23 @@ pub enum ImportOutcome {
 }
 
 impl Library {
-    /// Creates the folder, the database from the schema, and the config
-    /// file that points at the folder.
+    /// Creates the folder and the database, and writes the config file
+    /// that points at the folder.
     pub fn init(folder: &Path) -> Result<Library> {
         std::fs::create_dir_all(folder).with_context(|| format!("create {}", folder.display()))?;
         let folder = folder.canonicalize()?;
-        let db_path = folder.join(DB_NAME);
-        if db_path.exists() {
+        if folder.join(DB_NAME).exists() {
             bail!("{} already holds a library", folder.display());
         }
-        let db =
-            Connection::open(&db_path).with_context(|| format!("create {}", db_path.display()))?;
-        db.execute_batch(SCHEMA).context("apply the schema")?;
-        drop(db);
-        let config = Config {
-            library: folder.clone(),
-        };
+        let config = Config { library: folder };
+        let lib = Library::open(&config)?;
         config::save(&config)?;
-        Library::open(&config)
+        Ok(lib)
     }
 
-    /// Opens the library named by the config, taking the exclusive lock.
+    /// Opens the library named by the config, taking the exclusive lock,
+    /// and runs the migrations the database is missing. A missing
+    /// database file is created and gets every migration.
     pub fn open(config: &Config) -> Result<Library> {
         let folder = config.library.clone();
         let lock_path = folder.join(LOCK_NAME);
@@ -114,56 +109,20 @@ impl Library {
             Err(e) => return Err(e).with_context(|| format!("lock {}", lock_path.display())),
         };
         let db_path = folder.join(DB_NAME);
-        let db =
+        let mut db =
             Connection::open(&db_path).with_context(|| format!("open {}", db_path.display()))?;
+        stamp_unversioned(&db)?;
+        migrations(folder.clone())
+            .to_latest(&mut db)
+            .context("migrate the database")?;
+        // Foreign keys go on after the migrations, as SQLite advises for
+        // schema changes.
         db.execute_batch("PRAGMA foreign_keys = ON;")?;
-        let mut lib = Library {
+        Ok(Library {
             folder,
             db,
             _lock: guard,
-        };
-        lib.migrate()?;
-        Ok(lib)
-    }
-
-    /// Brings a database made by an older schema up to `SCHEMA_VERSION`.
-    fn migrate(&mut self) -> Result<()> {
-        let version: i64 = self.db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version >= SCHEMA_VERSION {
-            return Ok(());
-        }
-        if version < 1 {
-            self.add_book_stats().context("add the book_stats table")?;
-        }
-        Ok(())
-    }
-
-    /// Schema version 1: the `book_stats` table, filled from the OPF of
-    /// every book file. A file that cannot be read gets no row, the same
-    /// as a file with no numbers in it.
-    fn add_book_stats(&mut self) -> Result<()> {
-        let folder = self.folder.clone();
-        let tx = self.db.transaction()?;
-        tx.execute_batch(
-            "CREATE TABLE book_stats (
-                book_id INTEGER PRIMARY KEY REFERENCES books(id),
-                word_count INTEGER,
-                reading_ease REAL
-            );",
-        )?;
-        let ids: Vec<i64> = tx
-            .prepare("SELECT id FROM books")?
-            .query_map([], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        for id in ids {
-            let Ok(file_opf) = opf::read(&folder.join(book_file_name(id))) else {
-                continue;
-            };
-            insert_stats(&tx, id, &Stats::from_opf(&file_opf))?;
-        }
-        tx.pragma_update(None, "user_version", 1)?;
-        tx.commit()?;
-        Ok(())
+        })
     }
 
     /// The path of a book's file in the library folder.
@@ -341,6 +300,50 @@ impl Library {
     }
 }
 
+/// The schema changes in order. `PRAGMA user_version` counts how many of
+/// them the database has, and `Library::open` runs the rest. Each one
+/// runs in a transaction, so a change that fails leaves the database as
+/// it was.
+fn migrations(folder: PathBuf) -> Migrations<'static> {
+    Migrations::new(vec![
+        M::up(TABLES_SQL),
+        M::up_with_hook(BOOK_STATS_SQL, move |tx| fill_book_stats(tx, &folder)),
+    ])
+}
+
+/// Stamps a database from 0.1.6 or earlier as version 1. Those releases
+/// made the tables without setting `user_version`, so the database reads
+/// as empty to the migrations, and the first migration would fail on the
+/// tables that are already there.
+fn stamp_unversioned(db: &Connection) -> rusqlite::Result<()> {
+    let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let has_tables: bool = db.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'books')",
+        [],
+        |r| r.get(0),
+    )?;
+    if version == 0 && has_tables {
+        db.pragma_update(None, "user_version", 1)?;
+    }
+    Ok(())
+}
+
+/// Fills `book_stats` from the OPF of every book file. A file that cannot
+/// be read gets no row, the same as a file with no numbers in it.
+fn fill_book_stats(tx: &Transaction, folder: &Path) -> HookResult {
+    let ids: Vec<i64> = tx
+        .prepare("SELECT id FROM books")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for id in ids {
+        let Ok(file_opf) = opf::read(&folder.join(book_file_name(id))) else {
+            continue;
+        };
+        insert_stats(tx, id, &Stats::from_opf(&file_opf))?;
+    }
+    Ok(())
+}
+
 /// The name of a book's file in the library folder.
 pub fn book_file_name(id: i64) -> String {
     format!("{id}.kepub.epub")
@@ -376,7 +379,7 @@ fn book_from_row(row: &rusqlite::Row) -> rusqlite::Result<Book> {
 }
 
 /// Inserts the stats row when there is a number to hold.
-fn insert_stats(tx: &rusqlite::Transaction, id: i64, stats: &Stats) -> Result<()> {
+fn insert_stats(tx: &Transaction, id: i64, stats: &Stats) -> rusqlite::Result<()> {
     if stats.is_empty() {
         return Ok(());
     }
@@ -387,7 +390,7 @@ fn insert_stats(tx: &rusqlite::Transaction, id: i64, stats: &Stats) -> Result<()
     Ok(())
 }
 
-fn insert_authors(tx: &rusqlite::Transaction, id: i64, authors: &[Author]) -> Result<()> {
+fn insert_authors(tx: &Transaction, id: i64, authors: &[Author]) -> Result<()> {
     for (position, author) in authors.iter().enumerate() {
         tx.execute(
             "INSERT INTO book_authors (book_id, position, name, sort) VALUES (?1, ?2, ?3, ?4)",
@@ -464,5 +467,15 @@ impl Library {
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_migrations_apply_to_an_empty_database() {
+        migrations(PathBuf::new()).validate().unwrap();
     }
 }

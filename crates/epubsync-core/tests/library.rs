@@ -185,7 +185,8 @@ fn open_adds_the_stats_table_to_a_version_0_database_and_fills_it() {
     let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
         panic!();
     };
-    // Turn the database back into the shape before the stats table.
+    // Turn the database back into the shape 0.1.6 made: the tables
+    // without book_stats, and no version stamp.
     lib.db
         .execute_batch("DROP TABLE book_stats; PRAGMA user_version = 0;")
         .unwrap();
@@ -196,7 +197,7 @@ fn open_adds_the_stats_table_to_a_version_0_database_and_fills_it() {
         .db
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     assert_eq!(lib.get(id).unwrap().stats.word_count, Some(121970));
 }
 

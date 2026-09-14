@@ -1,4 +1,4 @@
--- The library database. One file in the library folder, applied at init.
+-- Migration 1: the library tables of the 0.1.6 release.
 
 CREATE TABLE books (
     id INTEGER PRIMARY KEY,
@@ -17,14 +17,6 @@ CREATE TABLE book_authors (
     name TEXT NOT NULL,
     sort TEXT NOT NULL,
     PRIMARY KEY (book_id, position)
-);
-
--- Numbers about a book's text, read from the file's OPF. The app never
--- edits them or writes them back. A book with no known number has no row.
-CREATE TABLE book_stats (
-    book_id INTEGER PRIMARY KEY REFERENCES books(id),
-    word_count INTEGER,
-    reading_ease REAL
 );
 
 CREATE TABLE devices (
@@ -63,6 +55,3 @@ CREATE TABLE words (
     looked_up_at TEXT NOT NULL,
     UNIQUE (word, volume_id, looked_up_at)
 );
-
--- The schema version. `Library::open` brings an older database up to it.
-PRAGMA user_version = 1;
