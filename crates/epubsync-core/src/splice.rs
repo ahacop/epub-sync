@@ -179,26 +179,43 @@ pub fn splice(opf: &Opf, record: &Metadata) -> String {
                 group_position,
                 ..
             } => {
-                edits.push(Edit {
-                    range: collection.range.clone(),
-                    text: replace_text(text, collection, &new.name),
-                });
+                let mut collection_text = replace_text(text, collection, &new.name);
                 match (group_position, new.number) {
                     (Some(pos), Some(n)) => edits.push(Edit {
                         range: pos.range.clone(),
                         text: replace_text(text, pos, &format_series_number(n)),
                     }),
                     (Some(pos), None) => edits.push(remove(text, &pos.range)),
-                    (None, Some(n)) => edits.push(Edit {
-                        range: collection.range.end..collection.range.end,
-                        text: format!(
-                            "{}{}",
-                            indent_before(text, collection.range.start),
-                            group_position_meta(id, n)
-                        ),
-                    }),
+                    (None, Some(n)) => {
+                        // The refinement points at the collection's id. A
+                        // collection without one is rewritten with a new id.
+                        let id = match id {
+                            Some(id) => id.clone(),
+                            None => {
+                                let id = next_id.make("collection");
+                                collection_text = format!(
+                                    r#"<{q} property="belongs-to-collection" id="{id}">{}</{q}>"#,
+                                    escape_text(&new.name),
+                                    q = collection.qname
+                                );
+                                id
+                            }
+                        };
+                        edits.push(Edit {
+                            range: collection.range.end..collection.range.end,
+                            text: format!(
+                                "{}{}",
+                                indent_before(text, collection.range.start),
+                                group_position_meta(&id, n)
+                            ),
+                        });
+                    }
                     (None, None) => {}
                 }
+                edits.push(Edit {
+                    range: collection.range.clone(),
+                    text: collection_text,
+                });
             }
         },
         (Some(series), None) => match &series.form {

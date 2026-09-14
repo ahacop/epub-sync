@@ -65,10 +65,11 @@ pub enum SeriesForm {
         name: Element,
         index: Option<Element>,
     },
-    /// `meta property="belongs-to-collection"` with its refinements.
+    /// `meta property="belongs-to-collection"` with its refinements. The
+    /// refinements point at the id, so a collection without one has none.
     Collection {
         collection: Element,
-        id: String,
+        id: Option<String>,
         collection_type: Option<Element>,
         group_position: Option<Element>,
     },
@@ -397,9 +398,13 @@ fn read_series(metadata: &Node, text: &str) -> Option<Series> {
                 .is_some_and(|t| t.value == "series")
         })
         .or(collections.first())?;
-    let id = pick.attribute("id").unwrap_or("").to_string();
-    let collection_type = refinement(metadata, &id, "collection-type", text);
-    let group_position = refinement(metadata, &id, "group-position", text);
+    let id = pick.attribute("id").map(str::to_string);
+    let collection_type = id
+        .as_deref()
+        .and_then(|id| refinement(metadata, id, "collection-type", text));
+    let group_position = id
+        .as_deref()
+        .and_then(|id| refinement(metadata, id, "group-position", text));
     let collection = element(pick, text);
     Some(Series {
         name: collection.value.clone(),

@@ -1,7 +1,7 @@
 mod common;
 
 use epubsync_core::metadata::{Author, Metadata, Series};
-use epubsync_core::opf::{self, Opf};
+use epubsync_core::opf::{self, Opf, SeriesForm};
 use epubsync_core::splice::splice;
 
 fn parse(text: &str) -> Opf {
@@ -100,6 +100,42 @@ fn writes_the_collection_series_form_in_place() {
     assert!(spliced.contains(r##"<meta refines="#c01" property="collection-type">series</meta>"##));
     assert!(spliced.contains(r##"<meta refines="#c01" property="group-position">2</meta>"##));
     assert!(!spliced.contains("calibre:series"));
+    assert_eq!(record(&parse(&spliced)), new);
+}
+
+#[test]
+fn gives_a_collection_without_an_id_one_before_refining_it() {
+    let text = common::EPUB3_OPF
+        .replace(
+            r##"<meta property="belongs-to-collection" id="c01">"##,
+            r##"<meta property="belongs-to-collection">"##,
+        )
+        .lines()
+        .filter(|line| !line.contains(r##"refines="#c01""##))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let before = parse(&text);
+    assert!(matches!(
+        before.series.as_ref().unwrap().form,
+        SeriesForm::Collection { id: None, .. }
+    ));
+    let mut new = record(&before);
+    new.series = Some(Series {
+        name: "Earthsea".into(),
+        number: Some(2.0),
+    });
+    let spliced = splice(&before, &new);
+    assert!(!spliced.contains(r##"refines="#""##), "{spliced}");
+    assert!(
+        spliced.contains(
+            r##"<meta property="belongs-to-collection" id="collection1">Earthsea</meta>"##
+        ),
+        "{spliced}"
+    );
+    assert!(
+        spliced.contains(r##"<meta refines="#collection1" property="group-position">2</meta>"##),
+        "{spliced}"
+    );
     assert_eq!(record(&parse(&spliced)), new);
 }
 

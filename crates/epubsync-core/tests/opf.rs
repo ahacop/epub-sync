@@ -122,7 +122,7 @@ fn reads_epub3_with_refinements_and_collection() {
         } => (collection, id, collection_type, group_position),
         other => panic!("expected the collection form, got {other:?}"),
     };
-    assert_eq!(id, "c01");
+    assert_eq!(id.as_deref(), Some("c01"));
     assert_slice(
         &opf,
         collection,
