@@ -7,7 +7,7 @@ use epubsync_core::kobo::Kobo;
 use epubsync_core::kobo::db::{self, KoboDb};
 use epubsync_core::library::{ImportOutcome, Library};
 use epubsync_core::metadata::{Author, Metadata, Series};
-use epubsync_core::sync;
+use epubsync_core::sync::{self, Gate};
 
 const SCHEMA: &str = include_str!("fixtures/kobo-schema.sql");
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -87,14 +87,21 @@ fn the_gate_is_up_on_an_untested_version_and_the_flag_lifts_it() {
     let gate = kobo.write_gate().unwrap();
     assert!(gate.contains("version 1"), "{gate}");
     assert!(gate.contains("--allow-newer-firmware"), "{gate}");
-    let (kept, skipped, reason) = sync::gate(
+    let Gate::Closed {
+        kept,
+        skipped,
+        reason,
+    } = sync::gate(
         vec![
             Action::Send { id: 1, revision: 1 },
             Action::Replace { id: 2, revision: 2 },
             Action::Delete { id: 3 },
         ],
         &kobo,
-    );
+    )
+    else {
+        panic!("expected the gate to be closed");
+    };
     assert_eq!(
         kept,
         vec![
@@ -103,7 +110,7 @@ fn the_gate_is_up_on_an_untested_version_and_the_flag_lifts_it() {
         ]
     );
     assert_eq!(skipped, vec![Action::Replace { id: 2, revision: 2 }]);
-    assert!(reason.is_some());
+    assert!(reason.contains("version 1"), "{reason}");
 
     kobo.open_db(true).unwrap();
     assert!(kobo.write_gate().is_none());
@@ -314,7 +321,10 @@ fn apply_updates_the_file_size_on_replace_and_sends_again_after_a_device_delete(
     let mut record = lib.get(id).unwrap().metadata;
     record.title = "Edited again".into();
     lib.edit(id, &record).unwrap();
-    let (kept, skipped, _) = sync::gate(sync::plan(&lib, &kobo).unwrap(), &kobo);
+    let Gate::Closed { kept, skipped, .. } = sync::gate(sync::plan(&lib, &kobo).unwrap(), &kobo)
+    else {
+        panic!("expected the gate to be closed");
+    };
     assert!(kept.is_empty());
     assert_eq!(skipped, vec![Action::Replace { id, revision: 3 }]);
     kobo.finish().unwrap();

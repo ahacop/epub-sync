@@ -103,20 +103,33 @@ pub fn read_back(library: &mut Library, device: &mut dyn Device) -> Result<ReadB
     })
 }
 
+/// The planned actions, split by the device's write gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Gate {
+    /// Every action runs, and sync updates the rows after.
+    Open(Vec<Action>),
+    /// The device refuses row writes. Sync holds the replacements back.
+    Closed {
+        kept: Vec<Action>,
+        skipped: Vec<Action>,
+        reason: String,
+    },
+}
+
 /// Splits the actions by the device's write gate: replacements are
-/// skipped when the gate is up. Returns the kept actions, the skipped
-/// ones, and the gate's reason.
-pub fn gate(
-    actions: Vec<Action>,
-    device: &dyn Device,
-) -> (Vec<Action>, Vec<Action>, Option<String>) {
+/// skipped when the gate is up.
+pub fn gate(actions: Vec<Action>, device: &dyn Device) -> Gate {
     match device.write_gate() {
-        None => (actions, Vec::new(), None),
+        None => Gate::Open(actions),
         Some(reason) => {
             let (skipped, kept): (Vec<Action>, Vec<Action>) = actions
                 .into_iter()
                 .partition(|a| matches!(a, Action::Replace { .. }));
-            (kept, skipped, Some(reason))
+            Gate::Closed {
+                kept,
+                skipped,
+                reason,
+            }
         }
     }
 }

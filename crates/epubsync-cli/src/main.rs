@@ -14,7 +14,7 @@ use epubsync_core::kobo::{self, Kobo};
 use epubsync_core::library::{Book, ImportOutcome, Library, ProgressRow};
 use epubsync_core::metadata::{Author, Metadata, Series, format_series_number};
 use epubsync_core::sort_name::sort_name;
-use epubsync_core::sync as core_sync;
+use epubsync_core::sync::{self as core_sync, Gate};
 
 #[derive(Parser)]
 #[command(
@@ -448,19 +448,31 @@ fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
         println!("Kobo database version {v}");
     }
 
-    let (mut actions, skipped, gate) = core_sync::gate(core_sync::plan(&lib, &kobo)?, &kobo);
-    if let Some(reason) = &gate {
-        println!("{reason}");
+    let mut gate = core_sync::gate(core_sync::plan(&lib, &kobo)?, &kobo);
+    match &gate {
+        Gate::Open(actions) => {
+            if actions.is_empty() {
+                println!("nothing to do");
+            }
+            for action in actions {
+                println!("{}", action_line(&lib, action)?);
+            }
+        }
+        Gate::Closed {
+            kept,
+            skipped,
+            reason,
+        } => {
+            println!("{reason}");
+            for action in kept {
+                println!("{}", action_line(&lib, action)?);
+            }
+            for action in skipped {
+                println!("skipped: {}", action_line(&lib, action)?);
+            }
+        }
     }
-    if actions.is_empty() && skipped.is_empty() {
-        println!("nothing to do");
-    }
-    for action in &actions {
-        println!("{}", action_line(&lib, action)?);
-    }
-    for action in &skipped {
-        println!("skipped: {}", action_line(&lib, action)?);
-    }
+    let (Gate::Open(actions) | Gate::Closed { kept: actions, .. }) = &mut gate;
     if flags.dry_run {
         return Ok(());
     }
@@ -483,7 +495,7 @@ fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
         }
     }
 
-    core_sync::apply(&mut lib, &mut kobo, &actions, |a| {
+    core_sync::apply(&mut lib, &mut kobo, actions, |a| {
         let verb = match a {
             Action::Send { .. } => "sending",
             Action::Replace { .. } => "replacing",
@@ -493,7 +505,7 @@ fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
         println!("{verb} {}", a.id());
     })?;
 
-    if gate.is_none() {
+    if let Gate::Open(actions) = &gate {
         let sent_now: Vec<i64> = actions
             .iter()
             .filter(|a| !matches!(a, Action::Delete { .. }))
