@@ -1,7 +1,5 @@
-//! Builds EPUB fixtures in memory. Each test passes its own OPF text, so one
-//! helper covers EPUB 2, EPUB 3, and every metadata form.
-
-#![allow(dead_code)]
+//! Builds EPUB fixtures in memory for tests. Each test passes its own OPF
+//! text, so one helper covers EPUB 2, EPUB 3, and every metadata form.
 
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
@@ -116,6 +114,11 @@ pub fn write_book(dir: &Path, name: &str, opf: &str, chapter: &str) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, build_book(opf, chapter)).unwrap();
     path
+}
+
+/// Replaces the OPF entry of the EPUB at `path` with `text`, as written.
+pub fn replace_opf(path: &Path, text: &str) -> anyhow::Result<()> {
+    crate::archive::rewrite(path, OPF_PATH, text)
 }
 
 /// Reads one entry out of a zip file as a string.

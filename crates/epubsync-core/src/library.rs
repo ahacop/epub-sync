@@ -16,7 +16,8 @@ use crate::metadata::{Author, Metadata, Series};
 use crate::sort_name::sort_name;
 use crate::stats::Engines;
 pub use crate::stats::Stats;
-use crate::{epub, kepub, opf, splice, stats};
+use crate::{kepub, stats};
+use epubsync_epub::Epub;
 
 const TABLES_SQL: &str = include_str!("migrations/1-tables.sql");
 const BOOK_STATS_SQL: &str = include_str!("migrations/2-book-stats.sql");
@@ -130,23 +131,16 @@ impl Library {
     pub fn import(&mut self, source: &Path, force: bool) -> Result<ImportOutcome> {
         // 1 and 2: read the file metadata, measure a file that carries no
         // word count, and make missing sort names.
-        let source_opf = opf::read(source).with_context(|| format!("read {}", source.display()))?;
-        let record = Metadata::from_opf(&source_opf, sort_name);
-        let file_stats = Stats::from_opf(&source_opf);
+        let source_epub = Epub::open(source)?;
+        let (record, made_sort) = source_epub.metadata(sort_name);
+        let file_stats = source_epub.stats();
         let measured = file_stats.word_count.is_none();
         let stats = if measured {
-            stats::measure(source, &source_opf, &mut Engines::default())
+            stats::measure(&source_epub, &mut Engines::default())
                 .with_context(|| format!("measure {}", source.display()))?
         } else {
             file_stats
         };
-        let made_sort: Vec<Author> = source_opf
-            .creators
-            .iter()
-            .zip(&record.authors)
-            .filter(|(c, _)| c.sort().is_none())
-            .map(|(_, a)| a.clone())
-            .collect();
 
         // 3: stop on a book with the same title and first author.
         if !force && let Some(id) = self.find_same(&record)? {
@@ -219,10 +213,7 @@ impl Library {
 
     /// Splices the record and the stats into the book's file.
     fn write_file(&self, id: i64, record: &Metadata, stats: &Stats) -> Result<()> {
-        let path = self.book_path(id);
-        let file_opf = opf::read(&path)?;
-        let new_opf = splice::splice(&file_opf, record, stats);
-        epub::rewrite(&path, &file_opf.path, &new_opf)
+        Epub::open(&self.book_path(id))?.write(record, stats)
     }
 
     /// Every book in id order.
@@ -333,10 +324,10 @@ fn fill_book_stats(tx: &Transaction, folder: &Path) -> HookResult {
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     for id in ids {
-        let Ok(file_opf) = opf::read(&folder.join(book_file_name(id))) else {
+        let Ok(epub) = Epub::open(&folder.join(book_file_name(id))) else {
             continue;
         };
-        insert_stats(tx, id, &Stats::from_opf(&file_opf))?;
+        insert_stats(tx, id, &epub.stats())?;
     }
     Ok(())
 }
@@ -363,8 +354,8 @@ fn measure_books(tx: &Transaction, folder: &Path, report: &Report) -> HookResult
     let mut engines = Engines::default();
     for (n, id) in ids.into_iter().enumerate() {
         let path = folder.join(book_file_name(id));
-        let file_opf = match opf::read(&path) {
-            Ok(file_opf) => file_opf,
+        let epub = match Epub::open(&path) {
+            Ok(epub) => epub,
             Err(e) => {
                 report(&format!("skipped book {id}: {e:#}"));
                 continue;
@@ -374,11 +365,10 @@ fn measure_books(tx: &Transaction, folder: &Path, report: &Report) -> HookResult
             .map_err(|e| HookError::Hook(format!("{e:#}")))?
             .metadata;
         report(&format!("{}/{total} {}", n + 1, record.title));
-        let stats = stats::measure(&path, &file_opf, &mut engines)
+        let stats = stats::measure(&epub, &mut engines)
             .map_err(|e| HookError::Hook(format!("measure book {id}: {e:#}")))?;
         insert_stats(tx, id, &stats)?;
-        let new_opf = splice::splice(&file_opf, &record, &stats);
-        epub::rewrite(&path, &file_opf.path, &new_opf)
+        epub.write(&record, &stats)
             .map_err(|e| HookError::Hook(format!("write book {id}: {e:#}")))?;
     }
     Ok(())

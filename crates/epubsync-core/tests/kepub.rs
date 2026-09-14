@@ -1,4 +1,4 @@
-mod common;
+use epubsync_epub::fixtures as common;
 
 use epubsync_core::kepub;
 

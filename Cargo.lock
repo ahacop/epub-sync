@@ -940,10 +940,10 @@ version = "0.1.6"
 dependencies = [
  "anyhow",
  "directories",
+ "epubsync-epub",
  "fd-lock",
  "human_name",
  "readsight",
- "roxmltree 0.21.1",
  "rusqlite",
  "rusqlite_migration",
  "serde",
@@ -951,6 +951,16 @@ dependencies = [
  "toml",
  "unicode-normalization",
  "zbus",
+]
+
+[[package]]
+name = "epubsync-epub"
+version = "0.1.6"
+dependencies = [
+ "anyhow",
+ "roxmltree 0.21.1",
+ "serde",
+ "tempfile",
  "zip",
 ]
 

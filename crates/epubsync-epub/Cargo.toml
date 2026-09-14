@@ -1,0 +1,21 @@
+[package]
+name = "epubsync-epub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reads and writes the EPUB files EpubSync keeps"
+
+[features]
+# Builds small EPUB files in memory for tests. The crate's own unit tests
+# get the module without the feature.
+fixtures = []
+
+[dependencies]
+anyhow = "1.0.104"
+roxmltree = "0.21.1"
+serde = { version = "1.0.229", features = ["derive"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

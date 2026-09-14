@@ -8,9 +8,12 @@
 
 use std::ops::Range;
 
+use crate::metadata::Stats;
 use crate::metadata::{Metadata, format_series_number};
 use crate::opf::{Creator, Element, NS_OPF, Opf, SeriesForm, Version, indent_before};
-use crate::stats::Stats;
+
+#[cfg(test)]
+mod tests;
 
 /// One change to the text: the bytes in `range` become `text`.
 struct Edit {

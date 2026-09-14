@@ -1,6 +1,9 @@
 //! Rebuilds an EPUB zip with one entry replaced. Every other entry is
 //! copied raw, so its compressed bytes, its order, and its method stay.
 
+#[cfg(test)]
+mod tests;
+
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;

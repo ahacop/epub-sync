@@ -12,6 +12,9 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 use roxmltree::{Document, Node, ParsingOptions};
 
+#[cfg(test)]
+mod tests;
+
 pub const NS_OPF: &str = "http://www.idpf.org/2007/opf";
 pub const NS_DC: &str = "http://purl.org/dc/elements/1.1/";
 const NS_CONTAINER: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
@@ -319,6 +322,7 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
 
 impl Opf {
     /// The byte ranges of every element the app owns, in text order.
+    #[cfg(test)]
     pub fn owned_ranges(&self) -> Vec<Range<usize>> {
         owned_ranges(
             self.title.as_ref(),
@@ -619,30 +623,4 @@ fn percent_decode(href: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn joins_hrefs_to_the_opf_folder() {
-        assert_eq!(
-            join_path("OEBPS/content.opf", "images/cover.jpg"),
-            "OEBPS/images/cover.jpg"
-        );
-        assert_eq!(join_path("content.opf", "cover.jpg"), "cover.jpg");
-        assert_eq!(join_path("a/b/content.opf", "../cover.jpg"), "a/cover.jpg");
-    }
-
-    #[test]
-    fn undoes_percent_encoding_in_hrefs() {
-        assert_eq!(
-            join_path("OEBPS/content.opf", "Text/Other%2001.xhtml"),
-            "OEBPS/Text/Other 01.xhtml"
-        );
-        assert_eq!(join_path("content.opf", "caf%C3%A9.xhtml"), "café.xhtml");
-        assert_eq!(join_path("content.opf", "100%.xhtml"), "100%.xhtml");
-        assert_eq!(join_path("content.opf", "a%2Fb.xhtml"), "a/b.xhtml");
-    }
 }

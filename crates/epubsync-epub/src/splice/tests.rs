@@ -1,9 +1,7 @@
-mod common;
-
-use epubsync_core::metadata::{Author, Metadata, Series};
-use epubsync_core::opf::{self, Opf, SeriesForm};
-use epubsync_core::splice::splice;
-use epubsync_core::stats::Stats;
+use super::splice;
+use crate::fixtures as common;
+use crate::metadata::{Author, Metadata, Series, Stats};
+use crate::opf::{self, Opf, SeriesForm};
 
 fn parse(text: &str) -> Opf {
     opf::parse(common::OPF_PATH, text.to_string()).unwrap()

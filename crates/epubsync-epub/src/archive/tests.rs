@@ -1,6 +1,6 @@
-mod common;
-
-use epubsync_core::{epub, opf};
+use super::rewrite;
+use crate::fixtures as common;
+use crate::opf;
 use zip::CompressionMethod;
 
 fn entries(path: &std::path::Path) -> Vec<(String, CompressionMethod, u32)> {
@@ -25,7 +25,7 @@ fn rewrite_keeps_every_other_entry_as_it_was() {
     assert_eq!(before[5].1, CompressionMethod::Stored);
 
     let new_opf = common::EPUB2_OPF.replace("The Left Hand of Darkness", "The Right Hand of Light");
-    epub::rewrite(&path, common::OPF_PATH, &new_opf).unwrap();
+    rewrite(&path, common::OPF_PATH, &new_opf).unwrap();
 
     let after = entries(&path);
     assert_eq!(after.len(), before.len());

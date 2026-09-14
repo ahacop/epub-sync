@@ -1,4 +1,4 @@
-mod common;
+use epubsync_epub::fixtures as common;
 
 use std::path::Path;
 

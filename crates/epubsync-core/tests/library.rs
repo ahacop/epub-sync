@@ -1,12 +1,11 @@
-mod common;
-
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use epubsync_core::config::Config;
 use epubsync_core::library::{ImportOutcome, Library, Stats};
 use epubsync_core::metadata::{Author, Series};
-use epubsync_core::{epub, opf};
+use epubsync_epub::Epub;
+use epubsync_epub::fixtures as common;
 
 struct Setup {
     _dir: tempfile::TempDir,
@@ -41,10 +40,11 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
     SERIAL.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The first author's sort name as the file gives it, `None` when the
+/// file gives none.
 fn file_sort(path: &Path) -> Option<String> {
-    opf::read(path).unwrap().creators[0]
-        .sort()
-        .map(str::to_string)
+    let (record, made) = Epub::open(path).unwrap().metadata(str::to_string);
+    made.is_empty().then(|| record.authors[0].sort.clone())
 }
 
 #[test]
@@ -238,7 +238,7 @@ fn import_writes_the_measured_numbers_into_the_library_file() {
         r#"<meta property="schema:educationalLevel">109.00</meta>"#,
         "{text}"
     );
-    assert_eq!(Stats::from_opf(&opf::read(&path).unwrap()), SHORT_STATS);
+    assert_eq!(Epub::open(&path).unwrap().stats(), SHORT_STATS);
     assert!(common::read_entry(&path, "OEBPS/chapter1.xhtml").contains("koboSpan"));
 
     // An edit writes the same numbers again.
@@ -284,7 +284,7 @@ fn open_measures_the_books_of_a_version_2_library() {
         .map(|line| format!("{line}\n"))
         .collect::<String>()
         .replace("<dc:creator", "<dc:creator ns1:role=\"aut\"");
-    epub::rewrite(&broken_path, common::OPF_PATH, &broken_opf).unwrap();
+    common::replace_opf(&broken_path, &broken_opf).unwrap();
     lib.db.execute_batch("PRAGMA user_version = 2;").unwrap();
     let path = lib.book_path(id);
     let stripped: String = common::read_entry(&path, common::OPF_PATH)
@@ -292,7 +292,7 @@ fn open_measures_the_books_of_a_version_2_library() {
         .filter(|line| !line.contains("schema:"))
         .map(|line| format!("{line}\n"))
         .collect();
-    epub::rewrite(&path, common::OPF_PATH, &stripped).unwrap();
+    common::replace_opf(&path, &stripped).unwrap();
     drop(lib);
 
     let lines = Arc::new(Mutex::new(Vec::new()));
@@ -319,7 +319,7 @@ fn open_measures_the_books_of_a_version_2_library() {
     );
     assert_eq!(lib.get(id).unwrap().stats, SHORT_STATS);
     assert_eq!(lib.get(broken_id).unwrap().stats, Stats::default());
-    assert_eq!(Stats::from_opf(&opf::read(&path).unwrap()), SHORT_STATS);
+    assert_eq!(Epub::open(&path).unwrap().stats(), SHORT_STATS);
     let text = common::read_entry(&path, common::OPF_PATH);
     assert!(
         text.contains(r#"<meta property="schema:wordCount">11</meta>"#),
@@ -447,11 +447,11 @@ fn edit_updates_the_row_the_revision_and_the_file() {
     assert_eq!(book.revision, 2);
     assert_eq!(book.metadata, record);
 
-    let file = opf::read(&lib.book_path(id)).unwrap();
-    assert_eq!(file.title.unwrap().value, "The Left Hand");
-    assert_eq!(file.creators[0].sort(), Some("Le Guin, U. K."));
-    assert_eq!(file.series.as_ref().unwrap().number(), Some(4.5));
-    assert!(file.publisher.is_none());
+    let (file, made) = Epub::open(&lib.book_path(id))
+        .unwrap()
+        .metadata(str::to_string);
+    assert!(made.is_empty());
+    assert_eq!(file, record);
     assert!(common::read_entry(&lib.book_path(id), "OEBPS/chapter1.xhtml").contains("koboSpan"));
     assert_eq!(
         common::read_entry(&lib.book_path(id), "mimetype"),

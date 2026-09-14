@@ -1,7 +1,7 @@
-mod common;
-
-use epubsync_core::opf::{self, Attribute, CreatorId, Element, Opf, SeriesForm, Version};
-use epubsync_core::stats::Stats;
+use super::*;
+use crate::fixtures as common;
+use crate::metadata::Stats;
+use crate::opf;
 
 fn parse(text: &str) -> Opf {
     opf::parse(common::OPF_PATH, text.to_string()).unwrap()
@@ -310,4 +310,25 @@ fn accepts_a_doctype_in_the_container_and_the_opf() {
         opf.title.as_ref().unwrap(),
         "<dc:title>The Left Hand of Darkness</dc:title>",
     );
+}
+
+#[test]
+fn joins_hrefs_to_the_opf_folder() {
+    assert_eq!(
+        join_path("OEBPS/content.opf", "images/cover.jpg"),
+        "OEBPS/images/cover.jpg"
+    );
+    assert_eq!(join_path("content.opf", "cover.jpg"), "cover.jpg");
+    assert_eq!(join_path("a/b/content.opf", "../cover.jpg"), "a/cover.jpg");
+}
+
+#[test]
+fn undoes_percent_encoding_in_hrefs() {
+    assert_eq!(
+        join_path("OEBPS/content.opf", "Text/Other%2001.xhtml"),
+        "OEBPS/Text/Other 01.xhtml"
+    );
+    assert_eq!(join_path("content.opf", "caf%C3%A9.xhtml"), "café.xhtml");
+    assert_eq!(join_path("content.opf", "100%.xhtml"), "100%.xhtml");
+    assert_eq!(join_path("content.opf", "a%2Fb.xhtml"), "a/b.xhtml");
 }
