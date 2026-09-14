@@ -31,7 +31,7 @@ pub(crate) fn read(epub: &Path, spine: &[String]) -> Result<String> {
 /// The text of an XHTML document: every text node under `body`, with a
 /// space between nodes. Text inside `script` and `style` is left out.
 fn body_text(xhtml: &str) -> Result<String> {
-    let xhtml = replace_html_entities(xhtml);
+    let xhtml = replace_html_entities(&strip_xml_declarations(xhtml));
     let doc = opf::parse_xml(&xhtml)?;
     let mut out = String::new();
     if let Some(body) = doc
@@ -52,6 +52,25 @@ fn collect_text(node: Node, out: &mut String) {
             collect_text(child, out);
         }
     }
+}
+
+/// Removes every XML declaration. A publisher's file can carry a second
+/// declaration after the DOCTYPE, and the parser rejects a declaration
+/// anywhere but at the start. The zip entry is already decoded, so the
+/// declaration carries nothing the reader needs. A declaration with no
+/// closing `?>` stays, so the parser reports it.
+fn strip_xml_declarations(xhtml: &str) -> String {
+    let mut out = String::with_capacity(xhtml.len());
+    let mut rest = xhtml;
+    while let Some(at) = rest.find("<?xml ") {
+        let Some(len) = rest[at..].find("?>") else {
+            break;
+        };
+        out.push_str(&rest[..at]);
+        rest = &rest[at + len + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Replaces the named entities XHTML takes from its DTD, such as `&nbsp;`,
@@ -118,6 +137,18 @@ mod tests {
             r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>
             <style>p { color: red }</style><script>var x = 1;</script><p>Kept.</p></body></html>"#,
         )
+        .unwrap();
+        assert_eq!(text.trim(), "Kept.");
+    }
+
+    #[test]
+    fn accepts_a_second_xml_declaration_after_the_doctype() {
+        let text = body_text(concat!(
+            r#"<?xml version="1.0" encoding="utf-8"?>"#,
+            r#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">"#,
+            r#"<?xml version="1.0" encoding="utf-8"?>"#,
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Kept.</p></body></html>"#,
+        ))
         .unwrap();
         assert_eq!(text.trim(), "Kept.");
     }
