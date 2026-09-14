@@ -343,28 +343,30 @@ fn cell<'a>(content: impl Into<Element<'a, Message>>, column: Column) -> Element
     cell.into()
 }
 
-/// The latest progress: a bar, the percent, and the status chip. A book
-/// with no progress row shows a dash.
+/// The latest progress. A book that is being read shows a bar and the
+/// percent. A finished book shows the word READ. A book with no progress
+/// row, or one that is not started, shows nothing.
 fn progress_cell<'a>(latest: Option<&'a ProgressRow>) -> Element<'a, Message> {
-    let Some(p) = latest else {
-        return text("—")
-            .size(BODY)
-            .style(theme::text_color(|c| c.faint))
-            .into();
-    };
-    row![
-        progress_bar(0.0..=100.0, p.percent as f32)
-            .length(64)
-            .girth(4)
-            .style(theme::bar(p.status)),
-        line(format!("{}%", p.percent))
-            .width(34)
-            .style(theme::text_color(|c| c.ink_2)),
-        chip(p.status),
-    ]
-    .spacing(6)
-    .align_y(Center)
-    .into()
+    match latest {
+        Some(p) if p.status == 2 => text("READ")
+            .size(11)
+            .font(SANS_MEDIUM)
+            .style(theme::text_color(|c| c.finished))
+            .into(),
+        Some(p) if p.status == 1 => row![
+            progress_bar(0.0..=100.0, p.percent as f32)
+                .length(64)
+                .girth(4)
+                .style(theme::bar(p.status)),
+            line(format!("{}%", p.percent))
+                .width(34)
+                .style(theme::text_color(|c| c.ink_2)),
+        ]
+        .spacing(6)
+        .align_y(Center)
+        .into(),
+        _ => space().into(),
+    }
 }
 
 /// The status word in upper case on its tint.
