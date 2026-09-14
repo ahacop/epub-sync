@@ -13,6 +13,8 @@ use crate::theme::{self, MONO, SANS_MEDIUM, SERIF, SERIF_MEDIUM};
 use crate::{Message, Selected, format, table};
 
 const WIDTH: f32 = 360.0;
+/// The side padding of the header, the body, and the footer.
+const INSET: f32 = 20.0;
 
 /// The link color in the description. The markdown widget takes its
 /// colors before it is drawn, when the mode is not known, so this one
@@ -43,22 +45,21 @@ pub fn view<'a>(
     .into()
 }
 
-/// "Book 13" and the close button.
+/// "Book 13" and the close button. The label starts at the body's left
+/// inset, and the close button's glyph ends at the body's right inset.
 fn header<'a>(id: i64) -> Element<'a, Message> {
     let close = button(container(text("×").size(15)).center(22))
         .on_press(Message::Close)
         .padding(0)
         .style(theme::close);
     row![
-        text(format!("Book {id}"))
-            .size(12)
-            .style(theme::text_color(|c| c.muted)),
+        theme::label(format!("Book {id}")).style(theme::text_color(|c| c.muted)),
         space().width(Fill),
         close,
     ]
     .align_y(Center)
-    .height(32)
-    .padding(padding::left(16).right(10))
+    .height(theme::HEADER)
+    .padding(padding::left(INSET).right(INSET - 6.0))
     .into()
 }
 
@@ -145,7 +146,7 @@ fn body<'a>(
         devices,
     ]
     .spacing(14)
-    .padding(padding::top(18).bottom(24).left(20).right(20))
+    .padding(padding::top(18).bottom(24).left(INSET).right(INSET))
     .into()
 }
 
@@ -216,7 +217,7 @@ fn footer(entry: &Entry) -> Element<'_, Message> {
             .style(theme::text_color(|c| c.muted)),
     )
     .width(Fill)
-    .padding([8, 20])
+    .padding([8.0, INSET])
     .clip(true)
     .into()
 }

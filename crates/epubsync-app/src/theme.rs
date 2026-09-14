@@ -33,6 +33,17 @@ pub const SERIF_MEDIUM: Font = Font {
 /// The text size of table cells, bylines, and labels.
 pub const BODY: f32 = 13.5;
 
+/// The height of the table header row and the sidebar header, which sit
+/// side by side.
+pub const HEADER: f32 = 32.0;
+
+/// A small label in the medium weight: a column header, the sidebar's
+/// "Book 13". It sets no color of its own, so a column header takes the
+/// header button's color.
+pub fn label<'a>(content: impl text::IntoFragment<'a>) -> text::Text<'a> {
+    text(content).size(12).font(SANS_MEDIUM)
+}
+
 /// One color set. The names match the mockup's tokens.
 #[derive(Debug, Clone, Copy)]
 pub struct Colors {
@@ -203,13 +214,18 @@ pub fn bar(status: i64) -> impl Fn(&Theme) -> progress_bar::Style {
     }
 }
 
-/// A column header: plain text on the header row's ground.
-pub fn header(theme: &Theme, _status: button::Status) -> button::Style {
-    button::Style {
-        background: None,
-        text_color: colors(theme).muted,
-        border: Border::default(),
-        ..button::Style::default()
+/// A column header: no ground of its own. The label reads in `ink` on
+/// the sorted column and under the pointer, and in `muted` elsewhere.
+pub fn header(sorted: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let c = colors(theme);
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: None,
+            text_color: if sorted || hovered { c.ink } else { c.muted },
+            border: Border::default(),
+            ..button::Style::default()
+        }
     }
 }
 

@@ -4,8 +4,10 @@
 use std::cmp::Ordering;
 
 use epubsync_core::library::ProgressRow;
-use iced::widget::{Text, button, column, container, progress_bar, row, scrollable, space, text};
-use iced::{Center, Element, Fill, Length, Right, padding};
+use iced::widget::{
+    self, Text, button, column, container, progress_bar, responsive, row, scrollable, space, text,
+};
+use iced::{Center, Element, Fill, Length, Right, Size, Task, padding};
 
 use crate::read::Entry;
 use crate::theme::{self, BODY, MONO, SANS_MEDIUM};
@@ -75,6 +77,21 @@ impl Default for Sort {
 /// The width of the selected row's mark on the left edge. Every row and
 /// the header row leave this space, so the cells line up.
 const MARK: f32 = 3.0;
+
+/// The height of one row, and the pitch from one row to the next: the
+/// row and the 1 px line under it. The table builds only the rows in
+/// view, and the pitch tells it which rows those are.
+const ROW: f32 = 34.0;
+const PITCH: f32 = ROW + 1.0;
+
+fn table_id() -> widget::Id {
+    widget::Id::new("table")
+}
+
+/// Scrolls the table body to the top.
+pub fn scroll_to_top() -> Task<Message> {
+    widget::operation::scroll_to(table_id(), scrollable::AbsoluteOffset { x: 0.0, y: 0.0 })
+}
 
 /// The progress row with the greatest `last_read` for a book. A row
 /// without `last_read` counts as the oldest.
@@ -168,20 +185,17 @@ pub fn order(open: &Open) -> Vec<&Entry> {
 }
 
 /// The table: the header row, then the rows in a scrollable column.
-pub fn view<'a>(open: &'a Open, rows: &[&'a Entry]) -> Element<'a, Message> {
-    let selected = open.selected.as_ref().map(|s| s.id);
-    let mut headers = row![space().width(MARK)].height(32).align_y(Center);
+pub fn view<'a>(open: &'a Open, rows: Vec<&'a Entry>) -> Element<'a, Message> {
+    let mut headers = row![space().width(MARK)]
+        .height(theme::HEADER)
+        .align_y(Center);
     for column in Column::ALL {
         headers = headers.push(header(column, open.sort));
     }
-    let body = column(
-        rows.iter()
-            .map(|e| book_row(e, &open.progress, selected == Some(e.book.id))),
-    );
     let table = column![
         container(headers).style(theme::ground(|c| c.window)),
         theme::hline(),
-        scrollable(body).width(Fill).height(Fill),
+        responsive(move |size| body(open, &rows, size)),
     ];
     container(table)
         .width(Fill)
@@ -190,21 +204,60 @@ pub fn view<'a>(open: &'a Open, rows: &[&'a Entry]) -> Element<'a, Message> {
         .into()
 }
 
-/// A column header: the name, and an arrow on the sorted column.
+/// The table body: a scrollable column as tall as every row, with only
+/// the rows in view built. Blank space stands in for the rows above and
+/// below them, so the scrollbar and the wheel behave as if every row were
+/// there. Building every row would shape the text of thousands of cells
+/// on each redraw.
+fn body<'a>(open: &'a Open, rows: &[&'a Entry], size: Size) -> Element<'a, Message> {
+    let selected = open.selected.as_ref().map(|s| s.id);
+    // One row more than fits, since the first row in view is cut off at
+    // the top.
+    let in_view = (size.height / PITCH).ceil() as usize + 1;
+    let first = ((open.scroll / PITCH) as usize).min(rows.len().saturating_sub(in_view));
+    let last = (first + in_view).min(rows.len());
+    let built = column(
+        rows[first..last]
+            .iter()
+            .map(|e| book_row(e, &open.progress, selected == Some(e.book.id))),
+    );
+    let above = space().height(first as f32 * PITCH);
+    let below = space().height((rows.len() - last) as f32 * PITCH);
+    scrollable(column![above, built, below])
+        .id(table_id())
+        .on_scroll(|viewport| Message::Scrolled(viewport.absolute_offset().y))
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
+/// A column header: the name, and on the sorted column an arrow for the
+/// direction and a 2 px `accent` mark along the bottom edge, the same
+/// mark the selected row wears on its left edge. The arrows are glyphs
+/// of the interface typeface, so they sit on the label's baseline.
+///
+/// The button gets the column's width itself. A button takes a plain fill
+/// from its content, not the fill portion, and the text headers would
+/// come out equal widths.
 fn header<'a>(column: Column, sort: Sort) -> Element<'a, Message> {
     let sorted = sort.column == column;
-    let color: fn(&theme::Colors) -> iced::Color = if sorted { |c| c.ink } else { |c| c.muted };
-    let name = text(column.name()).size(12).style(theme::text_color(color));
-    let mut label = row![name].spacing(3).align_y(Center);
+    let mut label = row![theme::label(column.name())].spacing(4).align_y(Center);
     if sorted {
-        let arrow = if sort.descending { "▼" } else { "▲" };
-        label = label.push(text(arrow).size(9).style(theme::text_color(|c| c.accent)));
+        let arrow = if sort.descending { "↓" } else { "↑" };
+        label = label.push(theme::label(arrow).style(theme::text_color(|c| c.accent)));
     }
-    button(cell(label, column))
+    let mark = container(space()).width(Fill).height(2);
+    let mark = if sorted {
+        mark.style(theme::ground(|c| c.accent))
+    } else {
+        mark
+    };
+    button(column![cell(label, column), mark])
         .on_press(Message::Sort(column))
+        .width(column.width())
         .height(Fill)
         .padding(0)
-        .style(theme::header)
+        .style(theme::header(sorted))
         .into()
 }
 
@@ -260,7 +313,7 @@ fn book_row<'a>(
         button(cells)
             .on_press(Message::Select(book.id))
             .width(Fill)
-            .height(34)
+            .height(ROW)
             .padding(0)
             .style(theme::row(selected)),
         theme::hline(),
@@ -274,11 +327,14 @@ fn line<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
     text(content).size(BODY).wrapping(text::Wrapping::None)
 }
 
-/// A cell: the column's width, 12 px side padding, one line, clipped.
-/// The id column is right-aligned.
+/// A cell: the column's width, the row's full height with the content
+/// centered in it, 12 px side padding, one line, clipped. The id column
+/// is right-aligned.
 fn cell<'a>(content: impl Into<Element<'a, Message>>, column: Column) -> Element<'a, Message> {
     let mut cell = container(content)
         .width(column.width())
+        .height(Fill)
+        .align_y(Center)
         .padding(padding::horizontal(12))
         .clip(true);
     if column == Column::Id {
@@ -403,6 +459,7 @@ mod tests {
             ],
             sort: Sort::default(),
             filter: String::new(),
+            scroll: 0.0,
             selected: None,
         }
     }

@@ -15,7 +15,7 @@ use epubsync_core::config;
 use epubsync_core::library::{Library, ProgressRow};
 use iced::keyboard::{self, key};
 use iced::widget::{column, container, markdown, row, space, text, text_input};
-use iced::{Center, Element, Fill, Subscription, padding};
+use iced::{Center, Element, Fill, Subscription, Task, padding};
 
 use crate::read::Entry;
 use crate::table::{Column, Sort};
@@ -42,6 +42,9 @@ struct Open {
     sort: Sort,
     /// The filter field's text.
     filter: String,
+    /// The table body's scroll offset in pixels. The table builds only
+    /// the rows in view at that offset.
+    scroll: f32,
     /// The book in the sidebar, if any.
     selected: Option<Selected>,
 }
@@ -64,6 +67,8 @@ enum Message {
     Sort(Column),
     /// A change to the filter field.
     Filter(String),
+    /// The table body scrolled to this offset in pixels.
+    Scrolled(f32),
     /// A click on a link in the description. It does nothing.
     LinkClicked,
 }
@@ -110,14 +115,15 @@ fn open() -> anyhow::Result<(Library, Viewer)> {
         progress,
         sort: Sort::default(),
         filter: String::new(),
+        scroll: 0.0,
         selected: None,
     };
     Ok((library, Viewer::Open(open)))
 }
 
-fn update(viewer: &mut Viewer, message: Message) {
+fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
     let Viewer::Open(open) = viewer else {
-        return;
+        return Task::none();
     };
     match message {
         Message::Select(id) => {
@@ -144,9 +150,16 @@ fn update(viewer: &mut Viewer, message: Message) {
                 };
             }
         }
-        Message::Filter(text) => open.filter = text,
+        Message::Filter(text) => {
+            // A new filter shows its matches from the top.
+            open.filter = text;
+            open.scroll = 0.0;
+            return table::scroll_to_top();
+        }
+        Message::Scrolled(offset) => open.scroll = offset,
         Message::LinkClicked => {}
     }
+    Task::none()
 }
 
 fn view(viewer: &Viewer) -> Element<'_, Message> {
@@ -158,11 +171,12 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
                 let entry = open.books.iter().find(|e| e.book.id == s.id)?;
                 Some((entry, s))
             });
-            let mut main = row![table::view(open, &rows)].height(Fill);
+            let shown_count = rows.len();
+            let mut main = row![table::view(open, rows)].height(Fill);
             if let Some((entry, selected)) = shown {
                 main = main.push(detail::view(entry, selected, &open.progress));
             }
-            column![toolbar(open, rows.len()), main, status_bar(open)].into()
+            column![toolbar(open, shown_count), main, status_bar(open)].into()
         }
     }
 }
