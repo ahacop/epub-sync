@@ -99,11 +99,29 @@ pub enum SeriesForm {
     },
 }
 
+/// The series the file has. The name and the number are read out of the
+/// elements in `form`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Series {
-    pub name: String,
-    pub number: Option<f64>,
     pub form: SeriesForm,
+}
+
+impl Series {
+    pub fn name(&self) -> &str {
+        match &self.form {
+            SeriesForm::Calibre { name, .. } => &name.value,
+            SeriesForm::Collection { collection, .. } => &collection.value,
+        }
+    }
+
+    /// The number, when the file has one and it parses.
+    pub fn number(&self) -> Option<f64> {
+        let element = match &self.form {
+            SeriesForm::Calibre { index, .. } => index.as_ref(),
+            SeriesForm::Collection { group_position, .. } => group_position.as_ref(),
+        };
+        element.and_then(|e| e.value.trim().parse().ok())
+    }
 }
 
 /// The parsed OPF: the text, the fields, and where each field sits.
@@ -216,7 +234,7 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
 
     let title = pick_title(&metadata, &text);
 
-    let creators = dc_children(&metadata, "creator")
+    let creators: Vec<Creator> = dc_children(&metadata, "creator")
         .map(|node| Creator {
             name: node_text(&node),
             range: node.range(),
@@ -255,13 +273,24 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
         .find('>')
         .map(|i| package.range().start + i)
         .ok_or_else(|| anyhow!("the package start tag has no end"))?;
-    // Where an insert goes when the file has no owned element: just
-    // before the metadata close tag.
-    let metadata_close = text[..metadata.range().end]
-        .rfind("</")
-        .unwrap_or(metadata.range().end);
+    // Inserts go after the last owned element. A file with no owned
+    // element takes them just before the metadata close tag.
+    let owned = owned_ranges(
+        title.as_ref(),
+        &creators,
+        publisher.as_ref(),
+        description.as_ref(),
+        series.as_ref(),
+    );
+    let insert_at = owned.last().map(|r| r.end).unwrap_or_else(|| {
+        text[..metadata.range().end]
+            .rfind("</")
+            .unwrap_or(metadata.range().end)
+    });
+    let indent_from = owned.first().map(|r| r.start).unwrap_or(insert_at);
+    let indent = indent_before(&text, indent_from);
 
-    let mut opf = Opf {
+    Ok(Opf {
         path: path.to_string(),
         text,
         version,
@@ -274,58 +303,68 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
         word_count,
         reading_ease,
         cover_path,
-        insert_at: metadata_close,
-        indent: String::new(),
+        insert_at,
+        indent,
         opf_prefix,
         dc_prefix,
         package_tag_end,
-    };
-    let owned = opf.owned_ranges();
-    if let Some(last) = owned.last() {
-        opf.insert_at = last.end;
-    }
-    let indent_from = owned.first().map(|r| r.start).unwrap_or(opf.insert_at);
-    opf.indent = indent_before(&opf.text, indent_from);
-    Ok(opf)
+    })
 }
 
 impl Opf {
     /// The byte ranges of every element the app owns, in text order.
     pub fn owned_ranges(&self) -> Vec<Range<usize>> {
-        let mut ranges = Vec::new();
-        if let Some(t) = &self.title {
-            ranges.push(t.range.clone());
-        }
-        for c in &self.creators {
-            ranges.push(c.range.clone());
-            if let Some(m) = c.file_as_meta() {
-                ranges.push(m.range.clone());
-            }
-        }
-        for e in [&self.publisher, &self.description].into_iter().flatten() {
-            ranges.push(e.range.clone());
-        }
-        if let Some(s) = &self.series {
-            match &s.form {
-                SeriesForm::Calibre { name, index } => {
-                    ranges.push(name.range.clone());
-                    ranges.extend(index.iter().map(|e| e.range.clone()));
-                }
-                SeriesForm::Collection {
-                    collection,
-                    collection_type,
-                    group_position,
-                    ..
-                } => {
-                    ranges.push(collection.range.clone());
-                    ranges.extend(collection_type.iter().map(|e| e.range.clone()));
-                    ranges.extend(group_position.iter().map(|e| e.range.clone()));
-                }
-            }
-        }
-        ranges.sort_by_key(|r| r.start);
-        ranges
+        owned_ranges(
+            self.title.as_ref(),
+            &self.creators,
+            self.publisher.as_ref(),
+            self.description.as_ref(),
+            self.series.as_ref(),
+        )
     }
+}
+
+/// The byte ranges of the given owned elements, in text order.
+fn owned_ranges(
+    title: Option<&Element>,
+    creators: &[Creator],
+    publisher: Option<&Element>,
+    description: Option<&Element>,
+    series: Option<&Series>,
+) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    if let Some(t) = title {
+        ranges.push(t.range.clone());
+    }
+    for c in creators {
+        ranges.push(c.range.clone());
+        if let Some(m) = c.file_as_meta() {
+            ranges.push(m.range.clone());
+        }
+    }
+    for e in [publisher, description].into_iter().flatten() {
+        ranges.push(e.range.clone());
+    }
+    if let Some(s) = series {
+        match &s.form {
+            SeriesForm::Calibre { name, index } => {
+                ranges.push(name.range.clone());
+                ranges.extend(index.iter().map(|e| e.range.clone()));
+            }
+            SeriesForm::Collection {
+                collection,
+                collection_type,
+                group_position,
+                ..
+            } => {
+                ranges.push(collection.range.clone());
+                ranges.extend(collection_type.iter().map(|e| e.range.clone()));
+                ranges.extend(group_position.iter().map(|e| e.range.clone()));
+            }
+        }
+    }
+    ranges.sort_by_key(|r| r.start);
+    ranges
 }
 
 fn dc_children<'a, 'input>(
@@ -409,8 +448,6 @@ fn read_series(metadata: &Node, text: &str) -> Option<Series> {
         let name = meta_content(&name_node, text);
         let index = index_node.map(|n| meta_content(&n, text));
         return Some(Series {
-            name: name.value.clone(),
-            number: index.as_ref().and_then(|i| i.value.trim().parse().ok()),
             form: SeriesForm::Calibre { name, index },
         });
     }
@@ -435,10 +472,6 @@ fn read_series(metadata: &Node, text: &str) -> Option<Series> {
         .and_then(|id| refinement(metadata, id, "group-position", text));
     let collection = element(pick, text);
     Some(Series {
-        name: collection.value.clone(),
-        number: group_position
-            .as_ref()
-            .and_then(|g| g.value.trim().parse().ok()),
         form: SeriesForm::Collection {
             collection,
             id,

@@ -289,7 +289,7 @@ fn edit_updates_the_row_the_revision_and_the_file() {
     let file = opf::read(&lib.book_path(id)).unwrap();
     assert_eq!(file.title.unwrap().value, "The Left Hand");
     assert_eq!(file.creators[0].sort(), Some("Le Guin, U. K."));
-    assert_eq!(file.series.as_ref().unwrap().number, Some(4.5));
+    assert_eq!(file.series.as_ref().unwrap().number(), Some(4.5));
     assert!(file.publisher.is_none());
     assert!(common::read_entry(&lib.book_path(id), "OEBPS/chapter1.xhtml").contains("koboSpan"));
     assert_eq!(

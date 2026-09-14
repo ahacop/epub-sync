@@ -76,8 +76,8 @@ fn reads_epub2_from_calibre() {
     assert_eq!(opf.language.as_deref(), Some("en"));
 
     let series = opf.series.as_ref().unwrap();
-    assert_eq!(series.name, "Hainish Cycle");
-    assert_eq!(series.number, Some(4.0));
+    assert_eq!(series.name(), "Hainish Cycle");
+    assert_eq!(series.number(), Some(4.0));
     let (name, series_index) = match &series.form {
         SeriesForm::Calibre { name, index } => (name, index),
         other => panic!("expected the Calibre form, got {other:?}"),
@@ -118,8 +118,8 @@ fn reads_epub3_with_refinements_and_collection() {
     assert_eq!(creator.sort(), Some("Le Guin, Ursula K."));
 
     let series = opf.series.as_ref().unwrap();
-    assert_eq!(series.name, "Earthsea Cycle");
-    assert_eq!(series.number, Some(1.0));
+    assert_eq!(series.name(), "Earthsea Cycle");
+    assert_eq!(series.number(), Some(1.0));
     let (collection, id, collection_type, group_position) = match &series.form {
         SeriesForm::Collection {
             collection,
@@ -161,7 +161,7 @@ fn reads_both_file_as_forms_on_one_creator() {
         opf.series.as_ref().unwrap().form,
         SeriesForm::Calibre { .. }
     ));
-    assert_eq!(opf.series.as_ref().unwrap().number, Some(5.0));
+    assert_eq!(opf.series.as_ref().unwrap().number(), Some(5.0));
 }
 
 #[test]

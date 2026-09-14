@@ -82,7 +82,7 @@ fn writes_the_calibre_series_form_in_place() {
     assert!(spliced.contains(r#"<meta name="calibre:series_index" content="4.5"/>"#));
     assert!(!spliced.contains("belongs-to-collection"));
     let after = parse(&spliced);
-    assert_eq!(after.series.as_ref().unwrap().number, Some(4.5));
+    assert_eq!(after.series.as_ref().unwrap().number(), Some(4.5));
 }
 
 #[test]

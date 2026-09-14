@@ -50,8 +50,8 @@ impl Metadata {
                 })
                 .collect(),
             series: opf.series.as_ref().map(|s| Series {
-                name: s.name.clone(),
-                number: s.number,
+                name: s.name().to_string(),
+                number: s.number(),
             }),
             publisher: opf
                 .publisher
