@@ -96,7 +96,8 @@ logged-in local user may by default. On macOS it runs `diskutil eject`.
 
 ## Build
 
-The dev shell has rustc, cargo, Go, and SQLite:
+The dev shell has rustc, cargo, Go, and SQLite. With direnv, an `.envrc`
+that holds `use flake` loads it whenever you enter the folder:
 
 ```sh
 nix develop
