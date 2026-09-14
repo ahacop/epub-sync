@@ -19,7 +19,7 @@ use epubsync_core::sync::{self as core_sync, Gate};
 #[derive(Parser)]
 #[command(
     name = "epubsync",
-    version,
+    version = env!("EPUBSYNC_VERSION"),
     about = "Manage a KEPUB library and sync it to a Kobo"
 )]
 struct Cli {

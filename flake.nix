@@ -5,6 +5,7 @@
 
   outputs = { self, nixpkgs }:
     let
+      version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
@@ -21,7 +22,7 @@
           # One workspace crate as a package. `extra` is merged into the
           # buildRustPackage attributes.
           crate = name: extra: pkgs.rustPlatform.buildRustPackage ({
-            version = "0.1.6";
+            inherit version;
             src = fs.toSource {
               root = ./.;
               fileset = fs.unions [ ./Cargo.toml ./Cargo.lock ./crates ./kepub-shim ];
