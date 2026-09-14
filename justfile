@@ -1,10 +1,12 @@
-# Run the library viewer.
-#
-#     just app
-#
+# A bare `just` lists the recipes.
+[private]
+default:
+    @just --list
+
 # Outside the dev shell the recipe runs itself inside `nix develop`, which
 # has cargo and puts the window libraries on LD_LIBRARY_PATH.
 
+# Run the library viewer
 app:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -13,15 +15,12 @@ app:
     fi
     cargo run -p epubsync-app
 
-# Cut a release: bump the version, tag, push, and update the Homebrew tap.
-#
-#     just release 0.1.2
-#
 # The tap checkout is expected next to this repo. Override with
 #     just TAP=~/src/homebrew-tap release 0.1.2
 
 TAP := "../homebrew-tap"
 
+# Cut a release: bump the version, tag, push, and update the Homebrew tap
 release version:
     #!/usr/bin/env bash
     set -euo pipefail
