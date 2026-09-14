@@ -110,13 +110,18 @@ fn main() -> ExitCode {
 }
 
 fn run(command: Command) -> Result<()> {
+    let config_path = config::path()?;
     if let Command::Init { folder } = &command {
         let lib = Library::init(folder)?;
+        let config = Config {
+            library: lib.folder.clone(),
+        };
+        config::save(&config_path, &config)?;
         println!("created the library at {}", lib.folder.display());
-        println!("config written to {}", config::path()?.display());
+        println!("config written to {}", config_path.display());
         return Ok(());
     }
-    let config = config::load()?;
+    let config = config::load(&config_path)?;
     match command {
         Command::Init { .. } => unreachable!(),
         Command::Import { path, force } => import(&config, &path, force),

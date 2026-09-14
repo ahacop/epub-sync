@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use epubsync_core::config::Config;
+use epubsync_core::config::{self, Config};
 use epubsync_core::library::{ImportOutcome, Library, Stats};
 use epubsync_core::metadata::{Author, Series};
 use epubsync_epub::Epub;
@@ -12,15 +12,10 @@ struct Setup {
     config: Config,
 }
 
-/// Makes a temp folder with the config file inside it and inits a library
-/// in a `library` subfolder. The config path is set through the env var
-/// for the length of the test process.
+/// Makes a temp folder and inits a library in a `library` subfolder.
 fn setup() -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
-    let config_path = root.join("config.toml");
-    // Each test process runs one test at a time here: see the serial lock.
-    unsafe { std::env::set_var("EPUBSYNC_CONFIG", &config_path) };
     let lib = Library::init(&root.join("library")).unwrap();
     let config = Config {
         library: lib.folder.clone(),
@@ -33,12 +28,6 @@ fn setup() -> Setup {
     }
 }
 
-static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn serial() -> std::sync::MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
-}
-
 /// The first author's sort name as the file gives it, `None` when the
 /// file gives none.
 fn file_sort(path: &Path) -> Option<String> {
@@ -48,11 +37,12 @@ fn file_sort(path: &Path) -> Option<String> {
 
 #[test]
 fn init_then_open_and_a_second_open_fails_on_the_lock() {
-    let _s = serial();
     let s = setup();
     assert!(s.config.library.join("library.sqlite").exists());
+    let config_path = s.root.join("config.toml");
+    config::save(&config_path, &s.config).unwrap();
     assert_eq!(
-        toml::from_str::<Config>(&std::fs::read_to_string(s.root.join("config.toml")).unwrap())
+        toml::from_str::<Config>(&std::fs::read_to_string(&config_path).unwrap())
             .unwrap()
             .library,
         s.config.library
@@ -73,7 +63,6 @@ fn init_then_open_and_a_second_open_fails_on_the_lock() {
 
 #[test]
 fn imports_an_epub_and_writes_the_made_sort_name() {
-    let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     let source = common::write_epub(&s.root, "candide.epub", common::BARE_OPF);
@@ -114,7 +103,6 @@ fn imports_an_epub_and_writes_the_made_sort_name() {
 
 #[test]
 fn import_reads_every_field_and_leaves_a_file_with_sort_names_alone() {
-    let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     let source = common::write_epub(&s.root, "lhod.epub", common::EPUB2_OPF);
@@ -162,7 +150,6 @@ const SHORT_STATS: Stats = Stats {
 
 #[test]
 fn import_keeps_the_numbers_a_standard_ebooks_file_carries() {
-    let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     let source = common::write_epub(&s.root, "pp.epub", common::STANDARD_EBOOKS_OPF);
@@ -184,7 +171,6 @@ fn import_keeps_the_numbers_a_standard_ebooks_file_carries() {
 
 #[test]
 fn import_measures_a_file_with_no_word_count() {
-    let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     let source = common::write_book(&s.root, "lhod.epub", common::EPUB2_OPF, SHORT_CHAPTER);
@@ -217,7 +203,6 @@ fn import_measures_a_file_with_no_word_count() {
 
 #[test]
 fn import_writes_the_measured_numbers_into_the_library_file() {
-    let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     let source = common::write_book(&s.root, "lhod.epub", common::EPUB2_OPF, SHORT_CHAPTER);
@@ -252,7 +237,6 @@ fn import_writes_the_measured_numbers_into_the_library_file() {
 
 #[test]
 fn stops_on_the_same_title_and_author_unless_forced() {
-    let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     let source = common::write_epub(&s.root, "lhod.epub", common::EPUB2_OPF);
@@ -275,7 +259,6 @@ fn stops_on_the_same_title_and_author_unless_forced() {
 
 #[test]
 fn copies_a_kepub_without_converting() {
-    let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     let source = common::write_epub(&s.root, "lhod.kepub.epub", common::EPUB2_OPF);
@@ -306,7 +289,6 @@ fn copies_a_kepub_without_converting() {
 
 #[test]
 fn a_failed_conversion_leaves_no_row_and_no_temp_file() {
-    let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     // The chapter is in the manifest and not in the spine, so measuring
@@ -322,7 +304,6 @@ fn a_failed_conversion_leaves_no_row_and_no_temp_file() {
 
 #[test]
 fn edit_updates_the_row_the_revision_and_the_file() {
-    let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     let source = common::write_epub(&s.root, "lhod.epub", common::EPUB2_OPF);
@@ -357,7 +338,6 @@ fn edit_updates_the_row_the_revision_and_the_file() {
 
 #[test]
 fn remove_deletes_the_file_and_the_rows_but_keeps_words() {
-    let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     let source = common::write_epub(&s.root, "lhod.epub", common::EPUB2_OPF);

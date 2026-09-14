@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use rusqlite_migration::{M, Migrations};
 
-use crate::config::{self, Config};
+use crate::config::Config;
 use crate::device::ReadStatus;
 use crate::metadata::{Author, Metadata, Series};
 use crate::sort_name::sort_name;
@@ -50,8 +50,7 @@ pub enum ImportOutcome {
 }
 
 impl Library {
-    /// Creates the folder and the database, and writes the config file
-    /// that points at the folder.
+    /// Creates the folder and the database.
     pub fn init(folder: &Path) -> Result<Library> {
         std::fs::create_dir_all(folder).with_context(|| format!("create {}", folder.display()))?;
         let folder = folder.canonicalize()?;
@@ -60,7 +59,6 @@ impl Library {
         }
         let config = Config { library: folder };
         let lib = Library::open(&config)?;
-        config::save(&config)?;
         Ok(lib)
     }
 

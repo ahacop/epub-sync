@@ -2,13 +2,10 @@ use epubsync_epub::fixtures as common;
 
 use std::path::Path;
 
-use epubsync_core::config::Config;
 use epubsync_core::device::{Action, Device};
 use epubsync_core::kobo::{self, Kobo};
 use epubsync_core::library::{ImportOutcome, Library};
 use epubsync_core::sync;
-
-static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Makes a folder that looks like a mounted Kobo.
 fn fake_kobo(parent: &Path, name: &str, serial: &str) -> std::path::PathBuf {
@@ -59,13 +56,8 @@ fn list_parses_ids_from_file_names() {
 
 #[test]
 fn sync_copies_replaces_deletes_and_updates_sent() {
-    let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("EPUBSYNC_CONFIG", dir.path().join("config.toml")) };
     let mut lib = Library::init(&dir.path().join("library")).unwrap();
-    let _ = Config {
-        library: lib.folder.clone(),
-    };
     let a = common::write_epub(dir.path(), "a.epub", common::EPUB2_OPF);
     let b = common::write_epub(dir.path(), "b.epub", common::BARE_OPF);
     let ImportOutcome::Imported { id: a_id, .. } = lib.import(&a, false).unwrap() else {

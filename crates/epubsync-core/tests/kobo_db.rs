@@ -10,7 +10,6 @@ use epubsync_core::metadata::{Author, Metadata, Series};
 use epubsync_core::sync::{self, Gate};
 
 const SCHEMA: &str = include_str!("fixtures/kobo-schema.sql");
-static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Makes a folder that looks like a mounted Kobo, with a database built
 /// from the schema fixture at the given version.
@@ -196,9 +195,7 @@ fn reads_progress() {
 
 #[test]
 fn reads_words_once_and_keeps_store_book_titles() {
-    let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("EPUBSYNC_CONFIG", dir.path().join("config.toml")) };
     let mut lib = Library::init(&dir.path().join("library")).unwrap();
     let epub = common::write_epub(dir.path(), "a.epub", common::EPUB2_OPF);
     let ImportOutcome::Imported { id, .. } = lib.import(&epub, false).unwrap() else {
@@ -262,9 +259,7 @@ fn reads_words_once_and_keeps_store_book_titles() {
 
 #[test]
 fn apply_updates_the_file_size_on_replace_and_sends_again_after_a_device_delete() {
-    let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("EPUBSYNC_CONFIG", dir.path().join("config.toml")) };
     let mut lib = Library::init(&dir.path().join("library")).unwrap();
     let epub = common::write_epub(dir.path(), "a.epub", common::EPUB2_OPF);
     let ImportOutcome::Imported { id, .. } = lib.import(&epub, false).unwrap() else {

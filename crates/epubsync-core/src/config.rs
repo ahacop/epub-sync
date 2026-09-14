@@ -1,6 +1,6 @@
 //! The config file: one key, the library folder path. It lives in the XDG
-//! config directory, or at the path in `EPUBSYNC_CONFIG` when that is set,
-//! which the tests use.
+//! config directory, or at the path in `EPUBSYNC_CONFIG` when that is set.
+//! Each binary reads the variable once at start and passes the path on.
 
 use std::path::{Path, PathBuf};
 
@@ -29,24 +29,21 @@ pub fn path() -> Result<PathBuf> {
     Ok(dirs.config_dir().join("config.toml"))
 }
 
-pub fn load() -> Result<Config> {
-    let path = path()?;
-    let text = match std::fs::read_to_string(&path) {
+pub fn load(path: &Path) -> Result<Config> {
+    let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(anyhow!(missing_message(&path)));
+            return Err(anyhow!(missing_message(path)));
         }
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
     };
     toml::from_str(&text).with_context(|| format!("parse {}", path.display()))
 }
 
-pub fn save(config: &Config) -> Result<PathBuf> {
-    let path = path()?;
+pub fn save(path: &Path, config: &Config) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     let text = toml::to_string(config)?;
-    std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
-    Ok(path)
+    std::fs::write(path, text).with_context(|| format!("write {}", path.display()))
 }

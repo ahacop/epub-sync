@@ -106,7 +106,7 @@ fn subscription(_viewer: &Viewer) -> Subscription<Message> {
 }
 
 fn open() -> anyhow::Result<(Library, Viewer)> {
-    let config = config::load()?;
+    let config = config::load(&config::path()?)?;
     let library = Library::open(&config)?;
     let open = Open {
         folder: library.folder.clone(),
