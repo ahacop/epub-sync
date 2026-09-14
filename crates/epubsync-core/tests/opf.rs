@@ -1,6 +1,6 @@
 mod common;
 
-use epubsync_core::opf::{self, Element, Opf, SeriesForm, Version};
+use epubsync_core::opf::{self, Attribute, CreatorId, Element, Opf, SeriesForm, Version};
 
 fn parse(text: &str) -> Opf {
     opf::parse(common::OPF_PATH, text.to_string()).unwrap()
@@ -40,14 +40,20 @@ fn reads_epub2_from_calibre() {
     assert_eq!(opf.creators.len(), 1);
     let creator = &opf.creators[0];
     assert_eq!(creator.name, "Ursula K. Le Guin");
-    assert_eq!(creator.file_as_attr.as_deref(), Some("Le Guin, Ursula K."));
-    assert!(creator.file_as_meta.is_none());
+    assert_eq!(creator.file_as_attr(), Some("Le Guin, Ursula K."));
+    assert!(creator.id.is_none());
     assert_eq!(creator.sort(), Some("Le Guin, Ursula K."));
     assert_eq!(
         creator.attributes,
         vec![
-            r##"opf:file-as="Le Guin, Ursula K.""##,
-            r##"opf:role="aut""##
+            Attribute {
+                name: "opf:file-as".into(),
+                value: "Le Guin, Ursula K.".into()
+            },
+            Attribute {
+                name: "opf:role".into(),
+                value: "aut".into()
+            },
         ]
     );
     assert_eq!(
@@ -99,9 +105,10 @@ fn reads_epub3_with_refinements_and_collection() {
     assert_eq!(opf.opf_prefix, None);
 
     let creator = &opf.creators[0];
-    assert_eq!(creator.id.as_deref(), Some("creator01"));
-    assert!(creator.file_as_attr.is_none());
-    let meta = creator.file_as_meta.as_ref().unwrap();
+    let CreatorId { id, file_as_meta } = creator.id.as_ref().unwrap();
+    assert_eq!(id, "creator01");
+    assert!(creator.file_as_attr().is_none());
+    let meta = file_as_meta.as_ref().unwrap();
     assert_eq!(meta.value, "Le Guin, Ursula K.");
     assert_slice(
         &opf,
@@ -147,11 +154,8 @@ fn reads_epub3_with_refinements_and_collection() {
 fn reads_both_file_as_forms_on_one_creator() {
     let opf = parse(common::EPUB3_CALIBRE_OPF);
     let creator = &opf.creators[0];
-    assert_eq!(creator.file_as_attr.as_deref(), Some("Le Guin, Ursula K."));
-    assert_eq!(
-        creator.file_as_meta.as_ref().unwrap().value,
-        "Le Guin, Ursula K."
-    );
+    assert_eq!(creator.file_as_attr(), Some("Le Guin, Ursula K."));
+    assert_eq!(creator.file_as_meta().unwrap().value, "Le Guin, Ursula K.");
     assert_eq!(opf.publisher.as_ref().unwrap().value, "Harper & Row");
     assert!(matches!(
         opf.series.as_ref().unwrap().form,

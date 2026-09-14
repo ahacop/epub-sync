@@ -53,8 +53,8 @@ pub fn splice(opf: &Opf, record: &Metadata) -> String {
         match opf.creators.get(i) {
             Some(creator) => {
                 let form = match (
-                    creator.file_as_attr.is_some(),
-                    creator.file_as_meta.is_some(),
+                    creator.file_as_attr().is_some(),
+                    creator.file_as_meta().is_some(),
                 ) {
                     (true, true) => FileAsForm::Both,
                     (true, false) => FileAsForm::Attribute,
@@ -76,7 +76,7 @@ pub fn splice(opf: &Opf, record: &Metadata) -> String {
                         q = creator.qname
                     ),
                 });
-                match (&creator.file_as_meta, form) {
+                match (creator.file_as_meta(), form) {
                     (Some(meta), _) => edits.push(Edit {
                         range: meta.range.clone(),
                         text: replace_text(text, meta, &author.sort),
@@ -123,7 +123,7 @@ pub fn splice(opf: &Opf, record: &Metadata) -> String {
     }
     for creator in opf.creators.iter().skip(record.authors.len()) {
         edits.push(remove(text, &creator.range));
-        if let Some(meta) = &creator.file_as_meta {
+        if let Some(meta) = creator.file_as_meta() {
             edits.push(remove(text, &meta.range));
         }
     }
@@ -312,24 +312,21 @@ fn creator_attributes(
     ids: &mut IdMaker,
 ) -> (String, String) {
     let sort_attr = escape_attr(sort);
+    let keeps_attr = matches!(form, FileAsForm::Attribute | FileAsForm::Both);
     let mut attrs: Vec<String> = Vec::new();
-    let mut wrote_file_as = false;
     for attr in &creator.attributes {
-        let name = attr.split('=').next().unwrap_or("");
-        if name.ends_with(":file-as") {
-            if matches!(form, FileAsForm::Attribute | FileAsForm::Both) {
-                attrs.push(format!(r#"{name}="{sort_attr}""#));
-                wrote_file_as = true;
-            }
-        } else {
-            attrs.push(attr.clone());
+        let name = &attr.name;
+        match (name.ends_with(":file-as"), keeps_attr) {
+            (true, true) => attrs.push(format!(r#"{name}="{sort_attr}""#)),
+            (true, false) => {}
+            (false, _) => attrs.push(format!(r#"{name}="{}""#, escape_attr(&attr.value))),
         }
     }
-    if matches!(form, FileAsForm::Attribute | FileAsForm::Both) && !wrote_file_as {
+    if keeps_attr && creator.file_as_attr().is_none() {
         attrs.push(format!(r#"{opf_prefix}:file-as="{sort_attr}""#));
     }
     let id = match &creator.id {
-        Some(id) => id.clone(),
+        Some(id) => id.id.clone(),
         None if form == FileAsForm::Meta => {
             let id = ids.make("creator");
             attrs.insert(0, format!(r#"id="{id}""#));
@@ -345,7 +342,7 @@ fn creator_attributes(
 /// file's other creators use, else the form of the package version.
 fn default_file_as_form(opf: &Opf) -> FileAsForm {
     for c in &opf.creators {
-        match (c.file_as_attr.is_some(), c.file_as_meta.is_some()) {
+        match (c.file_as_attr().is_some(), c.file_as_meta().is_some()) {
             (true, true) => return FileAsForm::Both,
             (true, false) => return FileAsForm::Attribute,
             (false, true) => return FileAsForm::Meta,

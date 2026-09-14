@@ -38,22 +38,46 @@ pub struct Creator {
     pub name: String,
     pub range: Range<usize>,
     pub qname: String,
-    pub id: Option<String>,
-    /// Every attribute of the element as written, in file order. The
-    /// `opf:file-as` attribute is included here and flagged in `file_as_attr`.
-    pub attributes: Vec<String>,
-    /// The `opf:file-as` attribute value, the EPUB 2 form.
-    pub file_as_attr: Option<String>,
+    /// Every attribute as written, in file order.
+    pub attributes: Vec<Attribute>,
+    /// The id, and the `file-as` refinement that points at it.
+    pub id: Option<CreatorId>,
+}
+
+/// One attribute of an element, with its name as written in the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribute {
+    /// The qualified name as written, such as `opf:file-as`.
+    pub name: String,
+    pub value: String,
+}
+
+/// A creator's id and the refinement that points at it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatorId {
+    pub id: String,
     /// The `meta refines property="file-as"` element, the EPUB 3 form.
     pub file_as_meta: Option<Element>,
 }
 
 impl Creator {
+    /// The `opf:file-as` attribute value, the EPUB 2 form.
+    pub fn file_as_attr(&self) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find(|a| a.name.ends_with(":file-as"))
+            .map(|a| a.value.as_str())
+    }
+
+    /// The `file-as` refinement, the EPUB 3 form.
+    pub fn file_as_meta(&self) -> Option<&Element> {
+        self.id.as_ref()?.file_as_meta.as_ref()
+    }
+
     /// The sort name the file gives, from the attribute else the refinement.
     pub fn sort(&self) -> Option<&str> {
-        self.file_as_attr
-            .as_deref()
-            .or(self.file_as_meta.as_ref().map(|m| m.value.as_str()))
+        self.file_as_attr()
+            .or(self.file_as_meta().map(|m| m.value.as_str()))
     }
 }
 
@@ -193,23 +217,15 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
     let title = pick_title(&metadata, &text);
 
     let creators = dc_children(&metadata, "creator")
-        .map(|node| {
-            let id = node.attribute("id").map(str::to_string);
-            let file_as_meta = id
-                .as_deref()
-                .and_then(|id| refinement(&metadata, id, "file-as", &text));
-            Creator {
-                name: node_text(&node),
-                range: node.range(),
-                qname: qname(&node, &text),
-                id,
-                attributes: node
-                    .attributes()
-                    .map(|a| text[a.range()].to_string())
-                    .collect(),
-                file_as_attr: node.attribute((NS_OPF, "file-as")).map(str::to_string),
-                file_as_meta,
-            }
+        .map(|node| Creator {
+            name: node_text(&node),
+            range: node.range(),
+            qname: qname(&node, &text),
+            attributes: node.attributes().map(|a| attribute(&a, &text)).collect(),
+            id: node.attribute("id").map(|id| CreatorId {
+                id: id.to_string(),
+                file_as_meta: refinement(&metadata, id, "file-as", &text),
+            }),
         })
         .collect();
 
@@ -282,7 +298,7 @@ impl Opf {
         }
         for c in &self.creators {
             ranges.push(c.range.clone());
-            if let Some(m) = &c.file_as_meta {
+            if let Some(m) = c.file_as_meta() {
                 ranges.push(m.range.clone());
             }
         }
@@ -340,6 +356,18 @@ fn qname(node: &Node, text: &str) -> String {
         .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
         .unwrap_or(rest.len());
     rest[..end].to_string()
+}
+
+/// The attribute with its name as written, prefix and all. roxmltree
+/// gives the local name and the namespace, so the name comes from the
+/// attribute's text.
+fn attribute(attr: &roxmltree::Attribute, text: &str) -> Attribute {
+    let raw = &text[attr.range()];
+    let name = raw.split('=').next().unwrap_or(raw).trim_end();
+    Attribute {
+        name: name.to_string(),
+        value: attr.value().to_string(),
+    }
 }
 
 fn element(node: &Node, text: &str) -> Element {
