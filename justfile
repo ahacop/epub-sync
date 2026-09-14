@@ -15,6 +15,15 @@ app:
     fi
     cargo run -p epubsync-app
 
+# Run the command from the working tree, e.g. `just cli list`
+cli *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cargo >/dev/null; then
+        exec nix develop --command just cli {{args}}
+    fi
+    cargo run -q -p epubsync-cli -- {{args}}
+
 # The tap checkout is expected next to this repo. Override with
 #     just TAP=~/src/homebrew-tap release 0.1.2
 
