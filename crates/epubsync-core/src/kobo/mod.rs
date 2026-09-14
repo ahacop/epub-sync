@@ -9,7 +9,7 @@ pub mod eject;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::device::{Action, Device, ReadBack, RowUpdate};
 use crate::metadata::Metadata;
@@ -21,8 +21,20 @@ const VERSION_FILE: &str = ".kobo/version";
 pub struct Kobo {
     pub serial: String,
     pub root: PathBuf,
-    db: Option<KoboDb>,
-    allow_untested: bool,
+    db: Db,
+}
+
+/// The Kobo database as this session may use it.
+enum Db {
+    /// The volume has no `.kobo/KoboReader.sqlite`. Also the state before
+    /// `open_db` runs and after `finish` closes the database.
+    Missing,
+    Writable(KoboDb),
+    /// An untested `dbversion`. Reads run. Row writes are refused.
+    ReadOnly {
+        db: KoboDb,
+        reason: String,
+    },
 }
 
 /// The mount folders detect scans: `/run/media/$USER`, `/media`,
@@ -69,8 +81,7 @@ impl Kobo {
         Ok(Kobo {
             serial,
             root: root.to_path_buf(),
-            db: None,
-            allow_untested: false,
+            db: Db::Missing,
         })
     }
 
@@ -78,21 +89,28 @@ impl Kobo {
     /// `allow_untested` the row writes run on any database version.
     pub fn open_db(&mut self, allow_untested: bool) -> Result<()> {
         let path = self.root.join(db::DB_PATH);
-        if path.exists() {
-            self.db = Some(KoboDb::open(&path)?);
+        if !path.exists() {
+            self.db = Db::Missing;
+            return Ok(());
         }
-        self.allow_untested = allow_untested;
+        let db = KoboDb::open(&path)?;
+        self.db = if db.is_tested() || allow_untested {
+            Db::Writable(db)
+        } else {
+            let reason = format!(
+                "Kobo database version {} has not been tested. Replacements and row updates are skipped. \
+                 Pass --allow-newer-firmware to run them.",
+                db.version
+            );
+            Db::ReadOnly { db, reason }
+        };
         Ok(())
     }
 
     pub fn db_version(&self) -> Option<i64> {
-        self.db.as_ref().map(|d| d.version)
-    }
-
-    fn writes_allowed(&self) -> bool {
         match &self.db {
-            Some(db) => db.is_tested() || self.allow_untested,
-            None => false,
+            Db::Missing => None,
+            Db::Writable(db) | Db::ReadOnly { db, .. } => Some(db.version),
         }
     }
 
@@ -149,7 +167,6 @@ impl Device for Kobo {
         let id = action.id();
         let target = self.book_path(id);
         let volume_id = self.volume_id(id);
-        let writes = self.writes_allowed();
         match action {
             Action::Send { .. } | Action::Replace { .. } | Action::SendAgain { .. } => {
                 std::fs::create_dir_all(self.folder())?;
@@ -157,8 +174,7 @@ impl Device for Kobo {
                     .with_context(|| format!("copy to {}", target.display()))?;
                 std::fs::File::open(&target)?.sync_all()?;
                 if matches!(action, Action::Replace { .. })
-                    && writes
-                    && let Some(db) = &self.db
+                    && let Db::Writable(db) = &self.db
                 {
                     db.update_file_size(&volume_id, size as i64)?;
                 }
@@ -173,21 +189,21 @@ impl Device for Kobo {
 
     fn write_gate(&self) -> Option<String> {
         match &self.db {
-            Some(db) if !db.is_tested() && !self.allow_untested => Some(format!(
-                "Kobo database version {} has not been tested. Replacements and row updates are skipped. \
-                 Pass --allow-newer-firmware to run them.",
-                db.version
-            )),
-            _ => None,
+            Db::ReadOnly { reason, .. } => Some(reason.clone()),
+            Db::Missing | Db::Writable(_) => None,
         }
     }
 
     fn update_rows(&mut self, records: &[(i64, &Metadata)]) -> Result<Vec<(i64, RowUpdate)>> {
-        let Some(db) = &mut self.db else {
-            return Ok(records
-                .iter()
-                .map(|(id, _)| (*id, RowUpdate::NoRow))
-                .collect());
+        let db = match &mut self.db {
+            Db::Missing => {
+                return Ok(records
+                    .iter()
+                    .map(|(id, _)| (*id, RowUpdate::NoRow))
+                    .collect());
+            }
+            Db::ReadOnly { reason, .. } => bail!("{reason}"),
+            Db::Writable(db) => db,
         };
         let tx = db.begin()?;
         let mut results = Vec::new();
@@ -200,8 +216,9 @@ impl Device for Kobo {
     }
 
     fn read_back(&mut self, book_ids: &[i64]) -> Result<ReadBack> {
-        let Some(db) = &self.db else {
-            return Ok(ReadBack::default());
+        let db = match &self.db {
+            Db::Missing => return Ok(ReadBack::default()),
+            Db::Writable(db) | Db::ReadOnly { db, .. } => db,
         };
         let mut progress = Vec::new();
         for id in book_ids {
@@ -215,9 +232,9 @@ impl Device for Kobo {
     }
 
     fn finish(&mut self) -> Result<()> {
-        if let Some(db) = self.db.take() {
-            db.close()?;
+        match std::mem::replace(&mut self.db, Db::Missing) {
+            Db::Missing => Ok(()),
+            Db::Writable(db) | Db::ReadOnly { db, .. } => db.close(),
         }
-        Ok(())
     }
 }
