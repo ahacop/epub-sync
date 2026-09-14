@@ -8,6 +8,8 @@
 //! - a DOCTYPE line in `container.xml` or the OPF
 //! - percent-encoded hrefs, such as `Other%2001.xhtml` for `Other 01.xhtml`
 //! - a Dublin Core element in default-namespace form instead of `dc:`
+//! - a prefix such as `ns0:` on a creator's attributes, in place of `opf:`,
+//!   that no element declares
 //! - the EPUB 2 `opf:file-as` attribute and the EPUB 3 `file-as`
 //!   refinement, alone or both on one creator
 //! - the Calibre series metas and the EPUB 3 collection form

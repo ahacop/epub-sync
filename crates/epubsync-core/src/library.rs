@@ -22,6 +22,7 @@ use epubsync_epub::Epub;
 const TABLES_SQL: &str = include_str!("migrations/1-tables.sql");
 const BOOK_STATS_SQL: &str = include_str!("migrations/2-book-stats.sql");
 const MEASURE_BOOKS_SQL: &str = include_str!("migrations/3-measure-books.sql");
+const FILL_SKIPPED_BOOKS_SQL: &str = include_str!("migrations/4-fill-skipped-books.sql");
 const DB_NAME: &str = "library.sqlite";
 const LOCK_NAME: &str = "lock";
 const IMPORT_TEMP: &str = "import.tmp";
@@ -293,8 +294,13 @@ fn migrations(folder: PathBuf, report: Report) -> Migrations<'static> {
             let folder = folder.clone();
             move |tx| fill_book_stats(tx, &folder)
         }),
-        M::up_with_hook(MEASURE_BOOKS_SQL, move |tx| {
-            measure_books(tx, &folder, &report)
+        M::up_with_hook(MEASURE_BOOKS_SQL, {
+            let folder = folder.clone();
+            let report = Arc::clone(&report);
+            move |tx| measure_books(tx, &folder, &report)
+        }),
+        M::up_with_hook(FILL_SKIPPED_BOOKS_SQL, move |tx| {
+            fill_skipped_books(tx, &folder, &report)
         }),
     ])
 }
@@ -365,6 +371,53 @@ fn measure_books(tx: &Transaction, folder: &Path, report: &Report) -> HookResult
             .map_err(|e| HookError::Hook(format!("{e:#}")))?
             .metadata;
         report(&format!("{}/{total} {}", n + 1, record.title));
+        let stats = stats::measure(&epub, &mut engines)
+            .map_err(|e| HookError::Hook(format!("measure book {id}: {e:#}")))?;
+        insert_stats(tx, id, &stats)?;
+        epub.write(&record, &stats)
+            .map_err(|e| HookError::Hook(format!("write book {id}: {e:#}")))?;
+    }
+    Ok(())
+}
+
+/// Fills `book_stats` for every book with no row. Migration 3 left a book
+/// with no row when its OPF used a prefix no element declared, which the
+/// parser rejected then and accepts now. A file that carries numbers gives
+/// them, as at import. A file that carries none is measured and gets the
+/// numbers written in. A book whose file still cannot be read gets no row,
+/// and a line says so. The hook runs inside the migration transaction, as
+/// migration 3 does, with the same rollback on a failure.
+fn fill_skipped_books(tx: &Transaction, folder: &Path, report: &Report) -> HookResult {
+    let ids: Vec<i64> = tx
+        .prepare("SELECT id FROM books WHERE id NOT IN (SELECT book_id FROM book_stats)")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let total = ids.len();
+    report(&format!(
+        "filling the word count and reading ease of {total} books"
+    ));
+    let mut engines = Engines::default();
+    for (n, id) in ids.into_iter().enumerate() {
+        let path = folder.join(book_file_name(id));
+        let epub = match Epub::open(&path) {
+            Ok(epub) => epub,
+            Err(e) => {
+                report(&format!("skipped book {id}: {e:#}"));
+                continue;
+            }
+        };
+        let record = read_book(tx, id)
+            .map_err(|e| HookError::Hook(format!("{e:#}")))?
+            .metadata;
+        report(&format!("{}/{total} {}", n + 1, record.title));
+        let file_stats = epub.stats();
+        if file_stats.word_count.is_some() {
+            insert_stats(tx, id, &file_stats)?;
+            continue;
+        }
         let stats = stats::measure(&epub, &mut engines)
             .map_err(|e| HookError::Hook(format!("measure book {id}: {e:#}")))?;
         insert_stats(tx, id, &stats)?;

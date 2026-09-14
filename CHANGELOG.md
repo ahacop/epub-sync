@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+The command and the viewer now open a book whose OPF puts a prefix such as
+`ns0:` on a creator's attributes without declaring it. Such a book had no
+word count and no reading ease, because the migration that measured the
+library could not open its file. The next open of the library fills the
+numbers of every book that has none: from the file when it carries them,
+else by measuring the text. A write of such a file declares the prefix, so
+the file becomes well-formed XML.
+
 ## 0.1.6 (2026-09-14)
 
 The Homebrew package now includes the viewer. `brew install ahacop/tap/epubsync`

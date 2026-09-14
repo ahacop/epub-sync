@@ -332,3 +332,35 @@ fn undoes_percent_encoding_in_hrefs() {
     assert_eq!(join_path("content.opf", "100%.xhtml"), "100%.xhtml");
     assert_eq!(join_path("content.opf", "a%2Fb.xhtml"), "a/b.xhtml");
 }
+
+#[test]
+fn declares_an_attribute_prefix_no_element_declares() {
+    let text = common::EPUB2_OPF
+        .replace("opf:file-as", "ns0:file-as")
+        .replace("opf:role", "ns1:role");
+    let opf = parse(&text);
+    assert_eq!(opf.opf_prefix.as_deref(), Some("opf"));
+    assert!(
+        opf.text.contains(
+            r#"version="2.0" xmlns:ns0="http://www.idpf.org/2007/opf" xmlns:ns1="http://www.idpf.org/2007/opf">"#
+        ),
+        "{}",
+        opf.text
+    );
+    let creator = &opf.creators[0];
+    assert_eq!(creator.sort(), Some("Le Guin, Ursula K."));
+    assert_eq!(creator.attributes[0].name, "ns0:file-as");
+    assert_eq!(
+        &opf.text[creator.range.clone()],
+        r#"<dc:creator ns0:file-as="Le Guin, Ursula K." ns1:role="aut">Ursula K. Le Guin</dc:creator>"#
+    );
+    // The declared text parses again as it is.
+    opf::parse(common::OPF_PATH, opf.text.clone()).unwrap();
+}
+
+#[test]
+fn reports_an_xml_error_other_than_a_missing_prefix() {
+    let text = common::EPUB2_OPF.replace("</dc:title>", "</dc:titel>");
+    let err = opf::parse(common::OPF_PATH, text).unwrap_err();
+    assert!(format!("{err:#}").starts_with("parse the OPF: "), "{err:#}");
+}

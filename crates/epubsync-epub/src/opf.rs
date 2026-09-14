@@ -157,7 +157,8 @@ pub struct Opf {
     /// The newline and indentation before an owned element, for inserts.
     pub indent: String,
     /// The prefix declared for the OPF namespace on `package` or `metadata`,
-    /// when there is one. The EPUB 2 `file-as` attribute needs it.
+    /// when there is one: `opf` when the file declares it, else the first
+    /// one declared. The EPUB 2 `file-as` attribute needs it.
     pub opf_prefix: Option<String>,
     /// The prefix of the Dublin Core namespace as the title uses it. `None`
     /// means the default namespace form.
@@ -192,6 +193,65 @@ fn read_entry<R: Read + std::io::Seek>(
     Ok(text)
 }
 
+/// Declares, on the `package` element, every prefix the OPF uses and no
+/// element declares, and returns the text with the declarations added.
+/// A publisher's tool can write `ns0:role` and `ns0:file-as` on a creator
+/// in place of `opf:role` and `opf:file-as` and drop the `xmlns:ns0`
+/// declaration. The XML parser rejects the whole file for that one
+/// prefix. The attributes the OPF spec puts a prefix on are all in the
+/// OPF namespace, so every missing prefix is declared as that namespace.
+/// A write keeps the declarations, so the file becomes well-formed XML.
+///
+/// A text with another XML error is returned as it is, so the caller's
+/// parse reports the error.
+fn declare_missing_prefixes(mut text: String) -> Result<String> {
+    let mut declared: Vec<String> = Vec::new();
+    loop {
+        let prefix = match parse_xml(&text) {
+            Ok(_) => return Ok(text),
+            Err(e) => match e.downcast_ref::<roxmltree::Error>() {
+                Some(roxmltree::Error::UnknownNamespace(prefix, _))
+                    if !declared.contains(prefix) =>
+                {
+                    prefix.clone()
+                }
+                _ => return Ok(text),
+            },
+        };
+        let at = root_start_tag_end(&text)?;
+        text.insert_str(at, &format!(r#" xmlns:{prefix}="{NS_OPF}""#));
+        declared.push(prefix);
+    }
+}
+
+/// The byte offset of the `>` that ends the root element's start tag, or
+/// of the `/` when the tag closes itself. The XML declaration, a DOCTYPE,
+/// and comments before the root are skipped.
+fn root_start_tag_end(text: &str) -> Result<usize> {
+    let mut from = 0;
+    loop {
+        let at = from
+            + text[from..]
+                .find('<')
+                .ok_or_else(|| anyhow!("the OPF has no root element"))?;
+        let rest = &text[at + 1..];
+        let end = at
+            + 1
+            + rest
+                .find('>')
+                .ok_or_else(|| anyhow!("the OPF has a tag with no end"))?;
+        if rest.starts_with('?') || rest.starts_with('!') {
+            from = end + 1;
+            continue;
+        }
+        return Ok(if text[..end].ends_with('/') {
+            end - 1
+        } else {
+            end
+        });
+    }
+}
+
 /// Parses an XML document that may start with a DOCTYPE. Some publishers put
 /// a DOCTYPE line in `container.xml` and the OPF. roxmltree rejects DOCTYPEs
 /// unless told otherwise, and the entity expansion it guards against is not
@@ -219,8 +279,11 @@ pub fn rootfile_path(container: &str) -> Result<String> {
 }
 
 /// Parses OPF text. `path` is the OPF path inside the zip and is used to
-/// resolve the cover path.
+/// resolve the cover path. A prefix the text uses and no element declares
+/// is declared first, so the text in the returned `Opf` can differ from
+/// `text` in the `package` start tag.
 pub fn parse(path: &str, text: String) -> Result<Opf> {
+    let text = declare_missing_prefixes(text)?;
     let doc = parse_xml(&text).context("parse the OPF")?;
     let package = doc.root_element();
     if package.tag_name().name() != "package" {
@@ -268,11 +331,17 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
     let cover_path = cover_path(&package, &metadata, path);
     let spine = spine_paths(&package, path);
 
-    let opf_prefix = [package, metadata]
+    let opf_prefixes: Vec<String> = [package, metadata]
         .iter()
         .flat_map(|n| n.namespaces())
-        .find(|ns| ns.uri() == NS_OPF && ns.name().is_some())
-        .and_then(|ns| ns.name().map(str::to_string));
+        .filter(|ns| ns.uri() == NS_OPF)
+        .filter_map(|ns| ns.name().map(str::to_string))
+        .collect();
+    let opf_prefix = opf_prefixes
+        .iter()
+        .find(|p| *p == "opf")
+        .or(opf_prefixes.first())
+        .cloned();
     let dc_prefix = title
         .as_ref()
         .and_then(|t| t.qname.split_once(':').map(|(p, _)| p.to_string()));

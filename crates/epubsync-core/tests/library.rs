@@ -270,21 +270,14 @@ fn open_measures_the_books_of_a_version_2_library() {
     };
     // Turn the library back into the shape version 2 made: the measured
     // books have no row and no numbers in their files. The third book's
-    // OPF gets a prefix no element declares, which the parser rejects.
+    // file is gone, so no migration can open it.
     lib.db
         .execute(
             "DELETE FROM book_stats WHERE book_id IN (?1, ?2)",
             [id, broken_id],
         )
         .unwrap();
-    let broken_path = lib.book_path(broken_id);
-    let broken_opf = common::read_entry(&broken_path, common::OPF_PATH)
-        .lines()
-        .filter(|line| !line.contains("schema:"))
-        .map(|line| format!("{line}\n"))
-        .collect::<String>()
-        .replace("<dc:creator", "<dc:creator ns1:role=\"aut\"");
-    common::replace_opf(&broken_path, &broken_opf).unwrap();
+    std::fs::remove_file(lib.book_path(broken_id)).unwrap();
     lib.db.execute_batch("PRAGMA user_version = 2;").unwrap();
     let path = lib.book_path(id);
     let stripped: String = common::read_entry(&path, common::OPF_PATH)
@@ -305,9 +298,9 @@ fn open_measures_the_books_of_a_version_2_library() {
         .db
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let lines = lines.lock().unwrap();
-    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert_eq!(lines.len(), 5, "{lines:?}");
     assert_eq!(
         lines[0],
         "measuring the word count and reading ease of 2 books"
@@ -315,6 +308,15 @@ fn open_measures_the_books_of_a_version_2_library() {
     assert_eq!(lines[1], "1/2 The Left Hand of Darkness");
     assert!(
         lines[2].starts_with(&format!("skipped book {broken_id}: ")),
+        "{lines:?}"
+    );
+    // Migration 4 tries the skipped book once more.
+    assert_eq!(
+        lines[3],
+        "filling the word count and reading ease of 1 books"
+    );
+    assert!(
+        lines[4].starts_with(&format!("skipped book {broken_id}: ")),
         "{lines:?}"
     );
     assert_eq!(lib.get(id).unwrap().stats, SHORT_STATS);
@@ -350,8 +352,80 @@ fn open_adds_the_stats_table_to_a_version_0_database_and_fills_it() {
         .db
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     assert_eq!(lib.get(id).unwrap().stats.word_count, Some(121970));
+}
+
+#[test]
+fn open_fills_the_books_a_version_3_library_skipped() {
+    let _s = serial();
+    let s = setup();
+    let mut lib = Library::open(&s.config).unwrap();
+    let se = common::write_epub(&s.root, "pp.epub", common::STANDARD_EBOOKS_OPF);
+    let ImportOutcome::Imported { id: se_id, .. } = lib.import(&se, false).unwrap() else {
+        panic!();
+    };
+    let source = common::write_book(&s.root, "lhod.epub", common::EPUB2_OPF, SHORT_CHAPTER);
+    let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    // Turn the library into the shape version 3 left for a book whose OPF
+    // used a prefix no element declared: no row, and the file as it came.
+    // The first file keeps the numbers it carries. The second loses the
+    // numbers import wrote.
+    lib.db
+        .execute(
+            "DELETE FROM book_stats WHERE book_id IN (?1, ?2)",
+            [se_id, id],
+        )
+        .unwrap();
+    let se_path = lib.book_path(se_id);
+    let se_opf = common::read_entry(&se_path, common::OPF_PATH)
+        .replace("<dc:creator", "<dc:creator ns0:role=\"aut\"");
+    common::replace_opf(&se_path, &se_opf).unwrap();
+    let path = lib.book_path(id);
+    let stripped = common::read_entry(&path, common::OPF_PATH)
+        .lines()
+        .filter(|line| !line.contains("schema:"))
+        .map(|line| format!("{line}\n"))
+        .collect::<String>()
+        .replace("opf:role", "ns1:role");
+    common::replace_opf(&path, &stripped).unwrap();
+    lib.db.execute_batch("PRAGMA user_version = 3;").unwrap();
+    drop(lib);
+
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&lines);
+    let lib = Library::open_reporting(&s.config, move |line| {
+        sink.lock().unwrap().push(line.to_string());
+    })
+    .unwrap();
+    let version: i64 = lib
+        .db
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 4);
+    let lines = lines.lock().unwrap();
+    assert_eq!(
+        *lines,
+        [
+            "filling the word count and reading ease of 2 books",
+            "1/2 Pride and Prejudice",
+            "2/2 The Left Hand of Darkness",
+        ]
+    );
+    assert_eq!(lib.get(se_id).unwrap().stats.word_count, Some(121970));
+    assert_eq!(lib.get(id).unwrap().stats, SHORT_STATS);
+    assert_eq!(Epub::open(&path).unwrap().stats(), SHORT_STATS);
+    let text = common::read_entry(&path, common::OPF_PATH);
+    assert!(
+        text.contains(r#"xmlns:ns1="http://www.idpf.org/2007/opf""#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"<meta property="schema:wordCount">11</meta>"#),
+        "{text}"
+    );
 }
 
 #[test]

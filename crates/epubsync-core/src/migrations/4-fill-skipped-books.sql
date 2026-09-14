@@ -1,0 +1,5 @@
+-- Migration 4: no table changes. The hook fills book_stats for every book
+-- with no row. Migration 3 left a book with no row when its OPF used a
+-- prefix no element declared, which the parser rejected then and accepts
+-- now. A file that carries numbers gives them, as at import. A file that
+-- carries none is measured and gets the numbers written in.
