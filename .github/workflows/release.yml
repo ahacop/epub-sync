@@ -1,8 +1,9 @@
 name: Release
 
-# Build the CLI for Apple Silicon on a version tag and attach the tarball to
-# a GitHub Release. The Homebrew formula downloads this tarball, so a user
-# who runs brew install needs no Rust or Go toolchain.
+# Build the CLI and the viewer for Apple Silicon on a version tag and attach
+# one tarball with both binaries to a GitHub Release. The Homebrew formula
+# downloads this tarball, so a user who runs brew install needs no Rust or Go
+# toolchain.
 
 on:
   push:
@@ -23,17 +24,22 @@ jobs:
         with:
           go-version-file: kepub-shim/go.mod
       - name: Build
-        run: cargo build --release --locked -p epubsync-cli
-      - name: Check that the binary links only system libraries
+        run: cargo build --release --locked -p epubsync-cli -p epubsync-app
+      - name: Check that the binaries link only system libraries
         run: |
-          otool -L target/release/epubsync
-          ! otool -L target/release/epubsync | grep -vE '^target/|/usr/lib/|/System/Library/'
+          for bin in epubsync epubsync-app; do
+            otool -L "target/release/$bin"
+            if otool -L "target/release/$bin" | grep -vE '^target/|/usr/lib/|/System/Library/'; then
+              echo "$bin links a library outside the system"
+              exit 1
+            fi
+          done
       - name: Package
         run: |
           version="${GITHUB_REF_NAME#v}"
           name="epubsync-$version-$TARGET"
           mkdir "$name"
-          cp target/release/epubsync "$name/"
+          cp target/release/epubsync target/release/epubsync-app "$name/"
           COPYFILE_DISABLE=1 tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > SHA256SUMS
           cat SHA256SUMS

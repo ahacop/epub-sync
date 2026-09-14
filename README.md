@@ -19,9 +19,10 @@ With Homebrew:
 brew install ahacop/tap/epubsync
 ```
 
-Nix builds the binary from source with Rust and Go. Homebrew downloads a
-prebuilt Apple Silicon binary from the GitHub Release for the tag. The
-installed program is one file and needs no other program on `PATH`.
+Nix builds the binaries from source with Rust and Go. Homebrew downloads
+prebuilt Apple Silicon binaries from the GitHub Release for the tag. It
+installs the `epubsync` command and the `epubsync-app` viewer. Each is
+one file and needs no other program on `PATH`.
 
 ## Commands
 
@@ -55,7 +56,7 @@ publisher, description, reading progress per device, and file path. It is
 read-only. The CLI stays the way to import, edit, remove, and sync.
 
 ```sh
-nix run github:ahacop/epub-sync#app
+nix run github:ahacop/epub-sync#app   # or, after brew install: epubsync-app
 ```
 
 The viewer holds the library while its window is open, so a CLI command
