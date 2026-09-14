@@ -563,12 +563,15 @@ fn spine_paths(package: &Node, opf_path: &str) -> Vec<String> {
         .collect()
 }
 
-/// Joins an href to the folder of the OPF, with `..` segments resolved.
+/// Joins an href to the folder of the OPF, with `..` segments resolved and
+/// percent-encoding undone. An href is a URL, so a file name with a space
+/// is written `Other%2001.xhtml` while the zip entry is `Other 01.xhtml`.
 fn join_path(opf_path: &str, href: &str) -> String {
     let mut parts: Vec<&str> = match opf_path.rsplit_once('/') {
         Some((dir, _)) => dir.split('/').collect(),
         None => Vec::new(),
     };
+    let href = percent_decode(href);
     for seg in href.split('/') {
         match seg {
             "." | "" => {}
@@ -593,6 +596,31 @@ pub(crate) fn indent_before(text: &str, at: usize) -> String {
     }
 }
 
+/// Replaces each `%XX` escape with its byte. Anything that is not a
+/// two-digit escape stays as written.
+fn percent_decode(href: &str) -> String {
+    let bytes = href.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escape = (bytes[i] == b'%' && i + 2 < bytes.len())
+            .then(|| std::str::from_utf8(&bytes[i + 1..i + 3]).ok())
+            .flatten()
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escape {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,5 +633,16 @@ mod tests {
         );
         assert_eq!(join_path("content.opf", "cover.jpg"), "cover.jpg");
         assert_eq!(join_path("a/b/content.opf", "../cover.jpg"), "a/cover.jpg");
+    }
+
+    #[test]
+    fn undoes_percent_encoding_in_hrefs() {
+        assert_eq!(
+            join_path("OEBPS/content.opf", "Text/Other%2001.xhtml"),
+            "OEBPS/Text/Other 01.xhtml"
+        );
+        assert_eq!(join_path("content.opf", "caf%C3%A9.xhtml"), "café.xhtml");
+        assert_eq!(join_path("content.opf", "100%.xhtml"), "100%.xhtml");
+        assert_eq!(join_path("content.opf", "a%2Fb.xhtml"), "a/b.xhtml");
     }
 }
