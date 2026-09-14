@@ -7,16 +7,18 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use rusqlite_migration::{HookResult, M, Migrations};
+use rusqlite_migration::{HookError, HookResult, M, Migrations};
 
 use crate::config::{self, Config};
 use crate::device::ReadStatus;
 use crate::metadata::{Author, Metadata, Series};
 use crate::sort_name::sort_name;
-use crate::{epub, kepub, opf, splice};
+pub use crate::stats::Stats;
+use crate::{epub, kepub, opf, splice, stats};
 
 const TABLES_SQL: &str = include_str!("migrations/1-tables.sql");
 const BOOK_STATS_SQL: &str = include_str!("migrations/2-book-stats.sql");
+const MEASURE_BOOKS_SQL: &str = include_str!("migrations/3-measure-books.sql");
 const DB_NAME: &str = "library.sqlite";
 const LOCK_NAME: &str = "lock";
 const IMPORT_TEMP: &str = "import.tmp";
@@ -35,28 +37,6 @@ pub struct Book {
     pub revision: i64,
     pub metadata: Metadata,
     pub stats: Stats,
-}
-
-/// Numbers about the book's text, read from the file's OPF at import.
-/// The app never edits them or writes them back.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Stats {
-    pub word_count: Option<u64>,
-    /// The Flesch reading ease score: 0 to 100, higher is easier.
-    pub reading_ease: Option<f64>,
-}
-
-impl Stats {
-    pub fn from_opf(opf: &opf::Opf) -> Stats {
-        Stats {
-            word_count: opf.word_count,
-            reading_ease: opf.reading_ease,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.word_count.is_none() && self.reading_ease.is_none()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,10 +112,18 @@ impl Library {
 
     /// Imports an EPUB or KEPUB. See the design for the six steps.
     pub fn import(&mut self, source: &Path, force: bool) -> Result<ImportOutcome> {
-        // 1 and 2: read the file metadata and make missing sort names.
+        // 1 and 2: read the file metadata, measure a file that carries no
+        // word count, and make missing sort names.
         let source_opf = opf::read(source).with_context(|| format!("read {}", source.display()))?;
         let record = Metadata::from_opf(&source_opf, sort_name);
-        let stats = Stats::from_opf(&source_opf);
+        let file_stats = Stats::from_opf(&source_opf);
+        let measured = file_stats.word_count.is_none();
+        let stats = if measured {
+            stats::measure(source, &source_opf)
+                .with_context(|| format!("measure {}", source.display()))?
+        } else {
+            file_stats
+        };
         let made_sort: Vec<Author> = source_opf
             .creators
             .iter()
@@ -171,9 +159,10 @@ impl Library {
         let id = self.insert(&record, &stats)?;
         std::fs::rename(&temp, self.book_path(id)).context("rename the imported file")?;
 
-        // 6: write made sort names into the converted file.
-        if !made_sort.is_empty() {
-            self.write_file(id, &record)?;
+        // 6: write made sort names and measured numbers into the converted
+        // file.
+        if !made_sort.is_empty() || measured {
+            self.write_file(id, &record, &stats)?;
         }
         Ok(ImportOutcome::Imported { id, made_sort })
     }
@@ -212,12 +201,9 @@ impl Library {
         Ok(id)
     }
 
-    /// Splices the record into the book's file.
-    fn write_file(&self, id: i64, record: &Metadata) -> Result<()> {
-        let path = self.book_path(id);
-        let file_opf = opf::read(&path)?;
-        let new_opf = splice::splice(&file_opf, record);
-        epub::rewrite(&path, &file_opf.path, &new_opf)
+    /// Splices the record and the stats into the book's file.
+    fn write_file(&self, id: i64, record: &Metadata, stats: &Stats) -> Result<()> {
+        write_file(&self.folder, id, record, stats)
     }
 
     /// Every book in id order.
@@ -234,32 +220,18 @@ impl Library {
     }
 
     pub fn get(&self, id: i64) -> Result<Book> {
-        let mut book = self
-            .db
-            .query_row(&format!("{BOOK_SELECT} WHERE id = ?1"), [id], book_from_row)
-            .optional()?
-            .ok_or_else(|| anyhow!("no book with id {id}"))?;
-        book.metadata.authors = self.authors(id)?;
-        Ok(book)
+        read_book(&self.db, id)
     }
 
     fn authors(&self, id: i64) -> Result<Vec<Author>> {
-        let mut stmt = self
-            .db
-            .prepare("SELECT name, sort FROM book_authors WHERE book_id = ?1 ORDER BY position")?;
-        let rows = stmt.query_map([id], |row| {
-            Ok(Author {
-                name: row.get(0)?,
-                sort: row.get(1)?,
-            })
-        })?;
-        Ok(rows.collect::<Result<_, _>>()?)
+        read_authors(&self.db, id)
     }
 
     /// Updates the row, adds 1 to the revision, then writes the record into
-    /// the file, in that order.
+    /// the file, in that order. The stats are written as stored, which is
+    /// what the file holds.
     pub fn edit(&mut self, id: i64, record: &Metadata) -> Result<()> {
-        self.get(id)?;
+        let stats = self.get(id)?.stats;
         let tx = self.db.transaction()?;
         tx.execute(
             "UPDATE books SET revision = revision + 1, title = ?2, series = ?3, series_number = ?4,
@@ -276,7 +248,7 @@ impl Library {
         tx.execute("DELETE FROM book_authors WHERE book_id = ?1", [id])?;
         insert_authors(&tx, id, &record.authors)?;
         tx.commit()?;
-        self.write_file(id, record)
+        self.write_file(id, record, &stats)
     }
 
     /// Deletes the file, then the book row, its authors, its stats, its
@@ -307,7 +279,11 @@ impl Library {
 fn migrations(folder: PathBuf) -> Migrations<'static> {
     Migrations::new(vec![
         M::up(TABLES_SQL),
-        M::up_with_hook(BOOK_STATS_SQL, move |tx| fill_book_stats(tx, &folder)),
+        M::up_with_hook(BOOK_STATS_SQL, {
+            let folder = folder.clone();
+            move |tx| fill_book_stats(tx, &folder)
+        }),
+        M::up_with_hook(MEASURE_BOOKS_SQL, move |tx| measure_books(tx, &folder)),
     ])
 }
 
@@ -344,6 +320,40 @@ fn fill_book_stats(tx: &Transaction, folder: &Path) -> HookResult {
     Ok(())
 }
 
+/// Measures every book with no `book_stats` row, inserts the row, and
+/// writes the numbers into the file. The hook runs inside the migration
+/// transaction, so a file that fails rolls the rows back and the next open
+/// runs the hook again. A file that got its numbers before the failure
+/// keeps them, and the next run writes the same numbers.
+fn measure_books(tx: &Transaction, folder: &Path) -> HookResult {
+    let ids: Vec<i64> = tx
+        .prepare("SELECT id FROM books WHERE id NOT IN (SELECT book_id FROM book_stats)")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for id in ids {
+        measure_book(tx, folder, id)
+            .map_err(|e| HookError::Hook(format!("measure book {id}: {e:#}")))?;
+    }
+    Ok(())
+}
+
+fn measure_book(tx: &Transaction, folder: &Path, id: i64) -> Result<()> {
+    let path = folder.join(book_file_name(id));
+    let file_opf = opf::read(&path)?;
+    let stats = stats::measure(&path, &file_opf)?;
+    insert_stats(tx, id, &stats)?;
+    let record = read_book(tx, id)?.metadata;
+    write_file(folder, id, &record, &stats)
+}
+
+/// Splices the record and the stats into the file of book `id`.
+fn write_file(folder: &Path, id: i64, record: &Metadata, stats: &Stats) -> Result<()> {
+    let path = folder.join(book_file_name(id));
+    let file_opf = opf::read(&path)?;
+    let new_opf = splice::splice(&file_opf, record, stats);
+    epub::rewrite(&path, &file_opf.path, &new_opf)
+}
+
 /// The name of a book's file in the library folder.
 pub fn book_file_name(id: i64) -> String {
     format!("{id}.kepub.epub")
@@ -352,6 +362,27 @@ pub fn book_file_name(id: i64) -> String {
 const BOOK_SELECT: &str =
     "SELECT id, revision, title, series, series_number, publisher, description,
      word_count, reading_ease FROM books LEFT JOIN book_stats ON book_id = id";
+
+fn read_book(db: &Connection, id: i64) -> Result<Book> {
+    let mut book = db
+        .query_row(&format!("{BOOK_SELECT} WHERE id = ?1"), [id], book_from_row)
+        .optional()?
+        .ok_or_else(|| anyhow!("no book with id {id}"))?;
+    book.metadata.authors = read_authors(db, id)?;
+    Ok(book)
+}
+
+fn read_authors(db: &Connection, id: i64) -> Result<Vec<Author>> {
+    let mut stmt =
+        db.prepare("SELECT name, sort FROM book_authors WHERE book_id = ?1 ORDER BY position")?;
+    let rows = stmt.query_map([id], |row| {
+        Ok(Author {
+            name: row.get(0)?,
+            sort: row.get(1)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
 
 /// A `books` row joined to its `book_stats` row as a Book with no authors.
 /// The caller fills them in from `book_authors`.

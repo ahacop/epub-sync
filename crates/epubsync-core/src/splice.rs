@@ -10,6 +10,7 @@ use std::ops::Range;
 
 use crate::metadata::{Metadata, format_series_number};
 use crate::opf::{Creator, Element, NS_OPF, Opf, SeriesForm, Version, indent_before};
+use crate::stats::Stats;
 
 /// One change to the text: the bytes in `range` become `text`.
 struct Edit {
@@ -25,8 +26,8 @@ enum FileAsForm {
     Both,
 }
 
-/// Returns the OPF text with `record` written into it.
-pub fn splice(opf: &Opf, record: &Metadata) -> String {
+/// Returns the OPF text with `record` and `stats` written into it.
+pub fn splice(opf: &Opf, record: &Metadata, stats: &Stats) -> String {
     let text = &opf.text;
     let mut edits: Vec<Edit> = Vec::new();
     let mut inserts: Vec<String> = Vec::new();
@@ -244,6 +245,25 @@ pub fn splice(opf: &Opf, record: &Metadata) -> String {
             }
         }
         (None, None) => {}
+    }
+
+    // The word count and the reading ease, in the form Standard Ebooks
+    // writes. The reading ease keeps two decimals.
+    let word_count = stats.word_count.map(|n| n.to_string());
+    let reading_ease = stats.reading_ease.map(|score| format!("{score:.2}"));
+    for (element, value, property) in [
+        (&opf.word_count, &word_count, "schema:wordCount"),
+        (&opf.reading_ease, &reading_ease, "schema:educationalLevel"),
+    ] {
+        match (element, value) {
+            (Some(e), Some(v)) => edits.push(Edit {
+                range: e.range.clone(),
+                text: replace_text(text, e, v),
+            }),
+            (Some(e), None) => edits.push(remove(text, &e.range)),
+            (None, Some(v)) => inserts.push(format!(r#"<meta property="{property}">{v}</meta>"#)),
+            (None, None) => {}
+        }
     }
 
     for insert in inserts {

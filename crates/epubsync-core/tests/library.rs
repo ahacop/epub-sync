@@ -5,7 +5,7 @@ use std::path::Path;
 use epubsync_core::config::Config;
 use epubsync_core::library::{ImportOutcome, Library, Stats};
 use epubsync_core::metadata::{Author, Series};
-use epubsync_core::opf;
+use epubsync_core::{epub, opf};
 
 struct Setup {
     _dir: tempfile::TempDir,
@@ -145,8 +145,23 @@ fn import_reads_every_field_and_leaves_a_file_with_sort_names_alone() {
     );
 }
 
+/// A chapter with eleven words in two sentences.
+const SHORT_CHAPTER: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Chapter 1</title></head>
+<body>
+<p>The cat sat on the mat. It was a <i>sunny</i> day.</p>
+</body>
+</html>
+"##;
+
+const SHORT_STATS: Stats = Stats {
+    word_count: Some(11),
+    reading_ease: Some(109.0),
+};
+
 #[test]
-fn import_stores_the_word_count_and_reading_ease() {
+fn import_keeps_the_numbers_a_standard_ebooks_file_carries() {
     let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
@@ -161,19 +176,123 @@ fn import_stores_the_word_count_and_reading_ease() {
             reading_ease: Some(60.95),
         }
     );
+    // The file keeps the numbers Standard Ebooks wrote.
+    let text = common::read_entry(&lib.book_path(id), common::OPF_PATH);
+    assert!(text.contains(r#"<meta property="schema:wordCount">121970</meta>"#));
+    assert!(text.contains(r#"<meta property="schema:educationalLevel">60.95</meta>"#));
+}
 
-    // A file with no numbers gets no stats row.
-    let bare = common::write_epub(&s.root, "candide.epub", common::BARE_OPF);
-    let ImportOutcome::Imported { id: bare_id, .. } = lib.import(&bare, false).unwrap() else {
+#[test]
+fn import_measures_a_file_with_no_word_count() {
+    let _s = serial();
+    let s = setup();
+    let mut lib = Library::open(&s.config).unwrap();
+    let source = common::write_book(&s.root, "lhod.epub", common::EPUB2_OPF, SHORT_CHAPTER);
+    let ImportOutcome::Imported { id, made_sort } = lib.import(&source, false).unwrap() else {
         panic!();
     };
-    assert_eq!(lib.get(bare_id).unwrap().stats, Stats::default());
-    let rows: i64 = lib
-        .db
-        .query_row("SELECT count(*) FROM book_stats", [], |r| r.get(0))
+    assert!(made_sort.is_empty());
+    assert_eq!(lib.get(id).unwrap().stats, SHORT_STATS);
+
+    // A book in a language the crate has no Flesch coefficients for gets
+    // a word count and no reading ease.
+    let latin = common::EPUB2_OPF
+        .replace(
+            "<dc:language>en</dc:language>",
+            "<dc:language>la</dc:language>",
+        )
+        .replace("The Left Hand of Darkness", "De Bello Gallico");
+    let source = common::write_book(&s.root, "bello.epub", &latin, SHORT_CHAPTER);
+    let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    assert_eq!(
+        lib.get(id).unwrap().stats,
+        Stats {
+            word_count: Some(11),
+            reading_ease: None,
+        }
+    );
+}
+
+#[test]
+fn import_writes_the_measured_numbers_into_the_library_file() {
+    let _s = serial();
+    let s = setup();
+    let mut lib = Library::open(&s.config).unwrap();
+    let source = common::write_book(&s.root, "lhod.epub", common::EPUB2_OPF, SHORT_CHAPTER);
+    let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    let path = lib.book_path(id);
+    // The conversion re-indents the OPF, so the lines are matched trimmed.
+    let text = common::read_entry(&path, common::OPF_PATH);
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let at = lines
+        .iter()
+        .position(|l| *l == r#"<meta property="schema:wordCount">11</meta>"#)
+        .unwrap_or_else(|| panic!("{text}"));
+    assert_eq!(
+        lines[at + 1],
+        r#"<meta property="schema:educationalLevel">109.00</meta>"#,
+        "{text}"
+    );
+    assert_eq!(Stats::from_opf(&opf::read(&path).unwrap()), SHORT_STATS);
+    assert!(common::read_entry(&path, "OEBPS/chapter1.xhtml").contains("koboSpan"));
+
+    // An edit writes the same numbers again.
+    let mut record = lib.get(id).unwrap().metadata;
+    record.title = "The Left Hand".into();
+    lib.edit(id, &record).unwrap();
+    assert_eq!(
+        common::read_entry(&path, common::OPF_PATH),
+        text.replace("The Left Hand of Darkness", "The Left Hand")
+    );
+}
+
+#[test]
+fn open_measures_the_books_of_a_version_2_library() {
+    let _s = serial();
+    let s = setup();
+    let mut lib = Library::open(&s.config).unwrap();
+    let source = common::write_book(&s.root, "lhod.epub", common::EPUB2_OPF, SHORT_CHAPTER);
+    let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    let se = common::write_epub(&s.root, "pp.epub", common::STANDARD_EBOOKS_OPF);
+    let ImportOutcome::Imported { id: se_id, .. } = lib.import(&se, false).unwrap() else {
+        panic!();
+    };
+    // Turn the library back into the shape version 2 made: the measured
+    // book has no row and no numbers in its file.
+    lib.db
+        .execute("DELETE FROM book_stats WHERE book_id = ?1", [id])
         .unwrap();
-    assert_eq!(rows, 1);
-    assert_eq!(lib.list().unwrap().len(), 2);
+    lib.db.execute_batch("PRAGMA user_version = 2;").unwrap();
+    let path = lib.book_path(id);
+    let stripped: String = common::read_entry(&path, common::OPF_PATH)
+        .lines()
+        .filter(|line| !line.contains("schema:"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    epub::rewrite(&path, common::OPF_PATH, &stripped).unwrap();
+    drop(lib);
+
+    let lib = Library::open(&s.config).unwrap();
+    let version: i64 = lib
+        .db
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 3);
+    assert_eq!(lib.get(id).unwrap().stats, SHORT_STATS);
+    assert_eq!(Stats::from_opf(&opf::read(&path).unwrap()), SHORT_STATS);
+    let text = common::read_entry(&path, common::OPF_PATH);
+    assert!(
+        text.contains(r#"<meta property="schema:wordCount">11</meta>"#),
+        "{text}"
+    );
+    // The Standard Ebooks book keeps its numbers.
+    assert_eq!(lib.get(se_id).unwrap().stats.word_count, Some(121970));
 }
 
 #[test]
@@ -197,7 +316,7 @@ fn open_adds_the_stats_table_to_a_version_0_database_and_fills_it() {
         .db
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     assert_eq!(lib.get(id).unwrap().stats.word_count, Some(121970));
 }
 
@@ -233,10 +352,18 @@ fn copies_a_kepub_without_converting() {
     let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
         panic!();
     };
-    assert_eq!(
-        std::fs::read(lib.book_path(id)).unwrap(),
-        std::fs::read(&source).unwrap()
-    );
+    // The chapter is copied as it is. The OPF gets the measured numbers.
+    let unconverted = |path: &Path| {
+        assert_eq!(
+            common::read_entry(path, "OEBPS/chapter1.xhtml"),
+            common::CHAPTER_XHTML
+        );
+        assert!(
+            common::read_entry(path, common::OPF_PATH)
+                .contains(r#"<meta property="schema:wordCount">13</meta>"#)
+        );
+    };
+    unconverted(&lib.book_path(id));
 
     // A file named .kepub, as some publishers ship Kobo builds, is a KEPUB too.
     let other = common::EPUB2_OPF.replace("The Left Hand of Darkness", "The Dispossessed");
@@ -244,10 +371,7 @@ fn copies_a_kepub_without_converting() {
     let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
         panic!();
     };
-    assert_eq!(
-        std::fs::read(lib.book_path(id)).unwrap(),
-        std::fs::read(&source).unwrap()
-    );
+    unconverted(&lib.book_path(id));
 }
 
 #[test]
@@ -255,7 +379,10 @@ fn a_failed_conversion_leaves_no_row_and_no_temp_file() {
     let _s = serial();
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
-    let source = common::write_epub(&s.root, "broken.epub", common::EPUB2_OPF);
+    // The chapter is in the manifest and not in the spine, so measuring
+    // skips it and the conversion is the first step that reads it.
+    let opf = common::EPUB2_OPF.replace(r#"<itemref idref="ch1"/>"#, "");
+    let source = common::write_epub(&s.root, "broken.epub", &opf);
     common::corrupt_entry(&source, "OEBPS/chapter1.xhtml");
     let err = lib.import(&source, false).unwrap_err();
     assert!(err.to_string().contains("convert"), "{err}");

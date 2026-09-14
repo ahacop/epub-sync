@@ -1,6 +1,7 @@
 mod common;
 
 use epubsync_core::opf::{self, Attribute, CreatorId, Element, Opf, SeriesForm, Version};
+use epubsync_core::stats::Stats;
 
 fn parse(text: &str) -> Opf {
     opf::parse(common::OPF_PATH, text.to_string()).unwrap()
@@ -216,8 +217,30 @@ fn reads_the_word_count_and_reading_ease_from_standard_ebooks() {
     let opf = parse(common::STANDARD_EBOOKS_OPF);
     assert_eq!(opf.title.as_ref().unwrap().value, "Pride and Prejudice");
     assert_eq!(opf.creators[0].sort(), Some("Austen, Jane"));
-    assert_eq!(opf.word_count, Some(121970));
-    assert_eq!(opf.reading_ease, Some(60.95));
+    let word_count = opf.word_count.as_ref().unwrap();
+    assert_eq!(word_count.value, "121970");
+    assert_eq!(word_count.qname, "meta");
+    assert_slice(
+        &opf,
+        word_count,
+        r#"<meta property="schema:wordCount">121970</meta>"#,
+    );
+    let reading_ease = opf.reading_ease.as_ref().unwrap();
+    assert_eq!(reading_ease.value, "60.95");
+    assert_slice(
+        &opf,
+        reading_ease,
+        r#"<meta property="schema:educationalLevel">60.95</meta>"#,
+    );
+    assert_eq!(
+        Stats::from_opf(&opf),
+        Stats {
+            word_count: Some(121970),
+            reading_ease: Some(60.95),
+        }
+    );
+    assert!(opf.owned_ranges().contains(&word_count.range));
+    assert!(opf.owned_ranges().contains(&reading_ease.range));
     assert_eq!(opf.indent, "\n\t\t");
 }
 
@@ -225,8 +248,24 @@ fn reads_the_word_count_and_reading_ease_from_standard_ebooks() {
 fn a_word_count_that_is_not_a_number_reads_as_none() {
     let text = common::STANDARD_EBOOKS_OPF.replace(">121970<", ">many<");
     let opf = parse(&text);
-    assert!(opf.word_count.is_none());
-    assert_eq!(opf.reading_ease, Some(60.95));
+    assert_eq!(opf.word_count.as_ref().unwrap().value, "many");
+    let stats = Stats::from_opf(&opf);
+    assert!(stats.word_count.is_none());
+    assert_eq!(stats.reading_ease, Some(60.95));
+}
+
+#[test]
+fn lists_the_xhtml_spine_documents_without_the_nav() {
+    assert_eq!(parse(common::EPUB2_OPF).spine, ["OEBPS/chapter1.xhtml"]);
+    // The nav document is in the manifest and not in the spine here; a
+    // spine that lists it still leaves it out.
+    let with_nav = common::EPUB3_OPF.replace(
+        r#"<itemref idref="ch1"/>"#,
+        r#"<itemref idref="nav"/>
+    <itemref idref="ch1"/>
+    <itemref idref="cover"/>"#,
+    );
+    assert_eq!(parse(&with_nav).spine, ["OEBPS/chapter1.xhtml"]);
 }
 
 #[test]

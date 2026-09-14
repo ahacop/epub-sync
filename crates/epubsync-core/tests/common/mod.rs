@@ -79,9 +79,15 @@ pub const COVER_JPEG: &[u8] = &[
 ];
 
 /// Builds an EPUB zip in memory with `mimetype` first and stored, then
-/// `container.xml`, the OPF at `OEBPS/content.opf`, one XHTML chapter, an
-/// NCX, and a cover image.
+/// `container.xml`, the OPF at `OEBPS/content.opf`, the chapter
+/// `CHAPTER_XHTML`, an NCX, and a cover image.
 pub fn build_epub(opf: &str) -> Vec<u8> {
+    build_book(opf, CHAPTER_XHTML)
+}
+
+/// Builds an EPUB zip like `build_epub`, with `chapter` as the one XHTML
+/// chapter, so a test can build a book with a known word count.
+pub fn build_book(opf: &str, chapter: &str) -> Vec<u8> {
     let mut zw = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
     let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
@@ -92,7 +98,7 @@ pub fn build_epub(opf: &str) -> Vec<u8> {
     zw.start_file(OPF_PATH, deflated).unwrap();
     zw.write_all(opf.as_bytes()).unwrap();
     zw.start_file("OEBPS/chapter1.xhtml", deflated).unwrap();
-    zw.write_all(CHAPTER_XHTML.as_bytes()).unwrap();
+    zw.write_all(chapter.as_bytes()).unwrap();
     zw.start_file("OEBPS/toc.ncx", deflated).unwrap();
     zw.write_all(TOC_NCX.as_bytes()).unwrap();
     zw.start_file("OEBPS/cover.jpg", stored).unwrap();
@@ -102,8 +108,13 @@ pub fn build_epub(opf: &str) -> Vec<u8> {
 
 /// Writes the EPUB built from `opf` to `name` inside `dir` and returns its path.
 pub fn write_epub(dir: &Path, name: &str, opf: &str) -> PathBuf {
+    write_book(dir, name, opf, CHAPTER_XHTML)
+}
+
+/// Writes the EPUB built from `opf` and `chapter` to `name` inside `dir`.
+pub fn write_book(dir: &Path, name: &str, opf: &str, chapter: &str) -> PathBuf {
     let path = dir.join(name);
-    std::fs::write(&path, build_epub(opf)).unwrap();
+    std::fs::write(&path, build_book(opf, chapter)).unwrap();
     path
 }
 

@@ -137,13 +137,16 @@ pub struct Opf {
     pub description: Option<Element>,
     pub language: Option<String>,
     pub series: Option<Series>,
-    /// The `meta property="schema:wordCount"` value. Standard Ebooks writes
-    /// it. The app reads it and never writes it.
-    pub word_count: Option<u64>,
-    /// The `meta property="schema:educationalLevel"` value, which Standard
+    /// The `meta property="schema:wordCount"` element, the form Standard
+    /// Ebooks writes. Import measures a file that has none and writes it.
+    pub word_count: Option<Element>,
+    /// The `meta property="schema:educationalLevel"` element, which Standard
     /// Ebooks uses for the Flesch reading ease score despite the name: 0 to
-    /// 100, higher is easier. The app reads it and never writes it.
-    pub reading_ease: Option<f64>,
+    /// 100, higher is easier. Import writes it next to the word count.
+    pub reading_ease: Option<Element>,
+    /// Paths inside the zip of the XHTML spine documents in reading order,
+    /// without the nav document. Measuring reads them.
+    pub spine: Vec<String>,
     /// Path of the cover image inside the zip.
     pub cover_path: Option<String>,
     /// Byte offset after the last element the app owns. Inserts go here.
@@ -190,7 +193,7 @@ fn read_entry<R: Read + std::io::Seek>(
 /// a DOCTYPE line in `container.xml` and the OPF. roxmltree rejects DOCTYPEs
 /// unless told otherwise, and the entity expansion it guards against is not
 /// a concern for files the user places in their own library.
-fn parse_xml(text: &str) -> Result<Document<'_>> {
+pub(crate) fn parse_xml(text: &str) -> Result<Document<'_>> {
     let options = ParsingOptions {
         allow_dtd: true,
         ..ParsingOptions::default()
@@ -257,9 +260,10 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
         .next()
         .map(|n| node_text(&n));
     let series = read_series(&metadata, &text);
-    let word_count = meta_property(&metadata, "schema:wordCount");
-    let reading_ease = meta_property(&metadata, "schema:educationalLevel");
+    let word_count = meta_property(&metadata, "schema:wordCount", &text);
+    let reading_ease = meta_property(&metadata, "schema:educationalLevel", &text);
     let cover_path = cover_path(&package, &metadata, path);
+    let spine = spine_paths(&package, path);
 
     let opf_prefix = [package, metadata]
         .iter()
@@ -281,6 +285,7 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
         publisher.as_ref(),
         description.as_ref(),
         series.as_ref(),
+        [word_count.as_ref(), reading_ease.as_ref()],
     );
     let insert_at = owned.last().map(|r| r.end).unwrap_or_else(|| {
         text[..metadata.range().end]
@@ -302,6 +307,7 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
         series,
         word_count,
         reading_ease,
+        spine,
         cover_path,
         insert_at,
         indent,
@@ -320,6 +326,7 @@ impl Opf {
             self.publisher.as_ref(),
             self.description.as_ref(),
             self.series.as_ref(),
+            [self.word_count.as_ref(), self.reading_ease.as_ref()],
         )
     }
 }
@@ -331,6 +338,7 @@ fn owned_ranges(
     publisher: Option<&Element>,
     description: Option<&Element>,
     series: Option<&Series>,
+    stats: [Option<&Element>; 2],
 ) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     if let Some(t) = title {
@@ -363,6 +371,7 @@ fn owned_ranges(
             }
         }
     }
+    ranges.extend(stats.into_iter().flatten().map(|e| e.range.clone()));
     ranges.sort_by_key(|r| r.start);
     ranges
 }
@@ -481,12 +490,11 @@ fn read_series(metadata: &Node, text: &str) -> Option<Series> {
     })
 }
 
-/// The parsed text of the first `meta property="..."` that refines nothing,
-/// when there is one and its text parses as `T`.
-fn meta_property<T: std::str::FromStr>(metadata: &Node, property: &str) -> Option<T> {
+/// The first `meta property="..."` that refines nothing, when there is one.
+fn meta_property(metadata: &Node, property: &str, text: &str) -> Option<Element> {
     metas(metadata)
         .find(|m| m.attribute("property") == Some(property) && m.attribute("refines").is_none())
-        .and_then(|m| node_text(&m).parse().ok())
+        .map(|m| element(&m, text))
 }
 
 fn meta_content(node: &Node, text: &str) -> Element {
@@ -520,6 +528,39 @@ fn cover_path(package: &Node, metadata: &Node, opf_path: &str) -> Option<String>
     })?;
     let href = item.attribute("href")?;
     Some(join_path(opf_path, href))
+}
+
+/// The zip paths of the spine documents in reading order: every `itemref`
+/// whose manifest item is XHTML, without the item that has the `nav`
+/// property and without the blank page kepubify puts first in a converted
+/// file, which is not book text.
+fn spine_paths(package: &Node, opf_path: &str) -> Vec<String> {
+    let child = |name: &str| {
+        package
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == name)
+    };
+    let (Some(manifest), Some(spine)) = (child("manifest"), child("spine")) else {
+        return Vec::new();
+    };
+    let item = |id: &str| {
+        manifest.children().find(|n| {
+            n.is_element() && n.tag_name().name() == "item" && n.attribute("id") == Some(id)
+        })
+    };
+    spine
+        .children()
+        .filter(|n| n.is_element() && n.tag_name().name() == "itemref")
+        .filter_map(|r| item(r.attribute("idref")?))
+        .filter(|i| i.attribute("media-type") == Some("application/xhtml+xml"))
+        .filter(|i| i.attribute("id") != Some("kepubify-titlepage-dummy"))
+        .filter(|i| {
+            !i.attribute("properties")
+                .is_some_and(|p| p.split_whitespace().any(|w| w == "nav"))
+        })
+        .filter_map(|i| i.attribute("href"))
+        .map(|href| join_path(opf_path, href))
+        .collect()
 }
 
 /// Joins an href to the folder of the OPF, with `..` segments resolved.

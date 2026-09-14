@@ -1,0 +1,5 @@
+-- Migration 3: no table changes. The hook measures every book with no
+-- book_stats row from the book text, inserts the row, and writes the
+-- numbers into the file. From this version on, import measures a file
+-- that carries no word count and writes the numbers into the file, so
+-- book_stats holds what the file holds.

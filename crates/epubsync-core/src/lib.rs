@@ -8,6 +8,7 @@ pub mod metadata;
 pub mod opf;
 pub mod sort_name;
 pub mod splice;
+pub mod stats;
 pub mod sync;
 
 /// The crate version, shown by the CLI.

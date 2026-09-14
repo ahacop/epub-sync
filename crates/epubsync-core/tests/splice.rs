@@ -3,6 +3,7 @@ mod common;
 use epubsync_core::metadata::{Author, Metadata, Series};
 use epubsync_core::opf::{self, Opf, SeriesForm};
 use epubsync_core::splice::splice;
+use epubsync_core::stats::Stats;
 
 fn parse(text: &str) -> Opf {
     opf::parse(common::OPF_PATH, text.to_string()).unwrap()
@@ -48,7 +49,7 @@ fn leaves_every_byte_outside_the_owned_ranges_unchanged() {
     for (name, text) in common::ALL_OPFS {
         let before = parse(text);
         let new = changed(&before);
-        let spliced = splice(&before, &new);
+        let spliced = splice(&before, &new, &Stats::from_opf(&before));
         let after = opf::parse(common::OPF_PATH, spliced.clone())
             .unwrap_or_else(|e| panic!("{name}: {e}\n{spliced}"));
         if before.owned_ranges().len() == after.owned_ranges().len() {
@@ -75,7 +76,7 @@ fn writes_the_calibre_series_form_in_place() {
         name: "Hainish \"Cycle\"".into(),
         number: Some(4.5),
     });
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(
         spliced.contains(r#"<meta name="calibre:series" content="Hainish &quot;Cycle&quot;"/>"#)
     );
@@ -93,7 +94,7 @@ fn writes_the_collection_series_form_in_place() {
         name: "Earthsea".into(),
         number: Some(2.0),
     });
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(
         spliced.contains(r##"<meta property="belongs-to-collection" id="c01">Earthsea</meta>"##)
     );
@@ -124,7 +125,7 @@ fn gives_a_collection_without_an_id_one_before_refining_it() {
         name: "Earthsea".into(),
         number: Some(2.0),
     });
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(!spliced.contains(r##"refines="#""##), "{spliced}");
     assert!(
         spliced.contains(
@@ -145,7 +146,7 @@ fn removes_the_series_when_the_record_has_none() {
         let before = parse(text);
         let mut new = record(&before);
         new.series = None;
-        let spliced = splice(&before, &new);
+        let spliced = splice(&before, &new, &Stats::from_opf(&before));
         assert!(!spliced.contains("calibre:series"), "{spliced}");
         assert!(!spliced.contains("belongs-to-collection"), "{spliced}");
         assert!(!spliced.contains("group-position"), "{spliced}");
@@ -163,7 +164,7 @@ fn writes_file_as_in_the_form_the_file_has() {
     let before = parse(common::EPUB2_OPF);
     let mut new = record(&before);
     new.authors[0].sort = "Guin, Ursula".into();
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(spliced.contains(
         r#"<dc:creator opf:file-as="Guin, Ursula" opf:role="aut">Ursula K. Le Guin</dc:creator>"#
     ));
@@ -173,7 +174,7 @@ fn writes_file_as_in_the_form_the_file_has() {
     let before = parse(common::EPUB3_OPF);
     let mut new = record(&before);
     new.authors[0].sort = "Guin, Ursula".into();
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(spliced.contains(r#"<dc:creator id="creator01">Ursula K. Le Guin</dc:creator>"#));
     assert!(
         spliced.contains(r##"<meta refines="#creator01" property="file-as">Guin, Ursula</meta>"##)
@@ -184,7 +185,7 @@ fn writes_file_as_in_the_form_the_file_has() {
     let before = parse(common::EPUB3_CALIBRE_OPF);
     let mut new = record(&before);
     new.authors[0].sort = "Guin, Ursula".into();
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(spliced.contains(r#"<dc:creator id="id" opf:file-as="Guin, Ursula" opf:role="aut">Ursula K. Le Guin</dc:creator>"#));
     assert!(spliced.contains(r##"<meta refines="#id" property="file-as">Guin, Ursula</meta>"##));
     assert_eq!(parse(&spliced).creators[0].sort(), Some("Guin, Ursula"));
@@ -206,7 +207,7 @@ fn inserts_missing_fields_into_a_bare_epub2_file() {
         publisher: Some("Cramer".into()),
         description: Some("Tout est pour le mieux & co.".into()),
     };
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(spliced.contains(r#"<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0" xmlns:opf="http://www.idpf.org/2007/opf">"#), "{spliced}");
     assert!(
         spliced.contains(r#"<dc:creator opf:file-as="Voltaire">Voltaire</dc:creator>"#),
@@ -231,7 +232,7 @@ fn inserts_a_creator_id_when_epub3_needs_one() {
     assert!(before.creators[0].id.is_none());
     let mut new = record(&before);
     new.authors[0].sort = "Le Guin, Ursula K.".into();
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(
         spliced.contains(r#"<dc:creator id="creator1">Ursula K. Le Guin</dc:creator>"#),
         "{spliced}"
@@ -254,7 +255,7 @@ fn adds_and_removes_creators() {
         name: "Charles Vess".into(),
         sort: "Vess, Charles".into(),
     });
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(
         spliced.contains(r#"<dc:creator id="creator1">Charles Vess</dc:creator>"#),
         "{spliced}"
@@ -268,7 +269,7 @@ fn adds_and_removes_creators() {
 
     let mut one = record(&two);
     one.authors.truncate(1);
-    let spliced = splice(&two, &one);
+    let spliced = splice(&two, &one, &Stats::from_opf(&two));
     assert!(!spliced.contains("Vess"), "{spliced}");
     assert!(!spliced.contains("\n\n"), "{spliced}");
     assert_eq!(record(&parse(&spliced)), one);
@@ -279,7 +280,7 @@ fn escapes_the_description_as_text() {
     let before = parse(common::EPUB2_OPF);
     let mut new = record(&before);
     new.description = Some("<p>Tom &amp; Jerry</p>".into());
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(
         spliced.contains("<dc:description>&lt;p&gt;Tom &amp;amp; Jerry&lt;/p&gt;</dc:description>")
     );
@@ -294,7 +295,78 @@ fn keeps_the_main_title_and_the_other_title() {
     let before = parse(common::TWO_TITLES_OPF);
     let mut new = record(&before);
     new.title = "The Tombs".into();
-    let spliced = splice(&before, &new);
+    let spliced = splice(&before, &new, &Stats::from_opf(&before));
     assert!(spliced.contains(r#"<dc:title id="t1">Earthsea</dc:title>"#));
     assert!(spliced.contains(r#"<dc:title id="t2">The Tombs</dc:title>"#));
+}
+
+#[test]
+fn replaces_the_word_count_and_reading_ease_in_place() {
+    let before = parse(common::STANDARD_EBOOKS_OPF);
+    let new = record(&before);
+    let stats = Stats {
+        word_count: Some(5),
+        reading_ease: Some(70.0),
+    };
+    let spliced = splice(&before, &new, &stats);
+    assert!(
+        spliced.contains("\t\t<meta property=\"schema:wordCount\">5</meta>\n"),
+        "{spliced}"
+    );
+    assert!(
+        spliced.contains("\t\t<meta property=\"schema:educationalLevel\">70.00</meta>\n"),
+        "{spliced}"
+    );
+    assert!(!spliced.contains("121970"), "{spliced}");
+    assert!(!spliced.contains("60.95"), "{spliced}");
+    let after = parse(&spliced);
+    assert_eq!(Stats::from_opf(&after), stats);
+    assert_eq!(record(&after), new);
+}
+
+#[test]
+fn inserts_the_word_count_and_reading_ease_into_a_file_that_has_none() {
+    for (text, expected) in [
+        (
+            common::BARE_OPF,
+            concat!(
+                "<dc:creator opf:file-as=\"Voltaire\">Voltaire</dc:creator>\n",
+                "    <meta property=\"schema:wordCount\">13</meta>\n",
+                "    <meta property=\"schema:educationalLevel\">83.50</meta>\n",
+                "    <dc:language>fr</dc:language>\n",
+            ),
+        ),
+        (
+            common::EPUB2_OPF,
+            concat!(
+                "<meta name=\"calibre:series_index\" content=\"4\"/>\n",
+                "    <meta property=\"schema:wordCount\">13</meta>\n",
+                "    <meta property=\"schema:educationalLevel\">83.50</meta>\n",
+                "    <meta name=\"cover\" content=\"cover\"/>\n",
+            ),
+        ),
+    ] {
+        let before = parse(text);
+        let new = record(&before);
+        let stats = Stats {
+            word_count: Some(13),
+            reading_ease: Some(83.5),
+        };
+        let spliced = splice(&before, &new, &stats);
+        assert!(spliced.contains(expected), "{spliced}");
+        let after = parse(&spliced);
+        assert_eq!(Stats::from_opf(&after), stats);
+        assert_eq!(record(&after), new);
+    }
+
+    // A book with no reading ease gets no educationalLevel element.
+    let before = parse(common::BARE_OPF);
+    let stats = Stats {
+        word_count: Some(13),
+        reading_ease: None,
+    };
+    let spliced = splice(&before, &record(&before), &stats);
+    assert!(spliced.contains(r#"<meta property="schema:wordCount">13</meta>"#));
+    assert!(!spliced.contains("educationalLevel"), "{spliced}");
+    assert_eq!(Stats::from_opf(&parse(&spliced)), stats);
 }
