@@ -1,6 +1,5 @@
 //! Measures the word count and the Flesch reading ease of a book. Import
-//! measures a file that carries no word count, and migration 3 measures
-//! the books that were imported before the app measured.
+//! measures a file that carries no word count.
 //!
 //! `readsight` counts the words of the book text and scores it with the
 //! Flesch coefficients of the book's language.

@@ -4,11 +4,10 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use rusqlite_migration::{HookError, HookResult, M, Migrations};
+use rusqlite_migration::{M, Migrations};
 
 use crate::config::{self, Config};
 use crate::device::ReadStatus;
@@ -20,16 +19,9 @@ use crate::{kepub, stats};
 use epubsync_epub::Epub;
 
 const TABLES_SQL: &str = include_str!("migrations/1-tables.sql");
-const BOOK_STATS_SQL: &str = include_str!("migrations/2-book-stats.sql");
-const MEASURE_BOOKS_SQL: &str = include_str!("migrations/3-measure-books.sql");
-const FILL_SKIPPED_BOOKS_SQL: &str = include_str!("migrations/4-fill-skipped-books.sql");
 const DB_NAME: &str = "library.sqlite";
 const LOCK_NAME: &str = "lock";
 const IMPORT_TEMP: &str = "import.tmp";
-
-/// Receives one line per step of a migration that takes a while, such as
-/// the one that measures every book. The CLI prints the lines.
-pub type Report = Arc<dyn Fn(&str) + Send + Sync>;
 
 pub struct Library {
     pub folder: PathBuf,
@@ -74,18 +66,8 @@ impl Library {
 
     /// Opens the library named by the config, taking the exclusive lock,
     /// and runs the migrations the database is missing. A missing
-    /// database file is created and gets every migration. Migration
-    /// progress is not reported.
+    /// database file is created and gets every migration.
     pub fn open(config: &Config) -> Result<Library> {
-        Library::open_reporting(config, |_| {})
-    }
-
-    /// Opens the library like `open`, and passes each progress line of a
-    /// long migration to `report`.
-    pub fn open_reporting(
-        config: &Config,
-        report: impl Fn(&str) + Send + Sync + 'static,
-    ) -> Result<Library> {
         let folder = config.library.clone();
         let lock_path = folder.join(LOCK_NAME);
         let lock_file = File::options()
@@ -109,8 +91,7 @@ impl Library {
         let db_path = folder.join(DB_NAME);
         let mut db =
             Connection::open(&db_path).with_context(|| format!("open {}", db_path.display()))?;
-        stamp_unversioned(&db)?;
-        migrations(folder.clone(), Arc::new(report))
+        migrations()
             .to_latest(&mut db)
             .context("migrate the database")?;
         // Foreign keys go on after the migrations, as SQLite advises for
@@ -287,144 +268,8 @@ impl Library {
 /// them the database has, and `Library::open` runs the rest. Each one
 /// runs in a transaction, so a change that fails leaves the database as
 /// it was.
-fn migrations(folder: PathBuf, report: Report) -> Migrations<'static> {
-    Migrations::new(vec![
-        M::up(TABLES_SQL),
-        M::up_with_hook(BOOK_STATS_SQL, {
-            let folder = folder.clone();
-            move |tx| fill_book_stats(tx, &folder)
-        }),
-        M::up_with_hook(MEASURE_BOOKS_SQL, {
-            let folder = folder.clone();
-            let report = Arc::clone(&report);
-            move |tx| measure_books(tx, &folder, &report)
-        }),
-        M::up_with_hook(FILL_SKIPPED_BOOKS_SQL, move |tx| {
-            fill_skipped_books(tx, &folder, &report)
-        }),
-    ])
-}
-
-/// Stamps a database from 0.1.6 or earlier as version 1. Those releases
-/// made the tables without setting `user_version`, so the database reads
-/// as empty to the migrations, and the first migration would fail on the
-/// tables that are already there.
-fn stamp_unversioned(db: &Connection) -> rusqlite::Result<()> {
-    let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    let has_tables: bool = db.query_row(
-        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'books')",
-        [],
-        |r| r.get(0),
-    )?;
-    if version == 0 && has_tables {
-        db.pragma_update(None, "user_version", 1)?;
-    }
-    Ok(())
-}
-
-/// Fills `book_stats` from the OPF of every book file. A file that cannot
-/// be read gets no row, the same as a file with no numbers in it.
-fn fill_book_stats(tx: &Transaction, folder: &Path) -> HookResult {
-    let ids: Vec<i64> = tx
-        .prepare("SELECT id FROM books")?
-        .query_map([], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    for id in ids {
-        let Ok(epub) = Epub::open(&folder.join(book_file_name(id))) else {
-            continue;
-        };
-        insert_stats(tx, id, &epub.stats())?;
-    }
-    Ok(())
-}
-
-/// Measures every book with no `book_stats` row, inserts the row, and
-/// writes the numbers into the file. A book whose OPF cannot be read gets
-/// no row, as in migration 2, and a line says so. The hook runs inside the
-/// migration transaction, so a measurement or a file write that fails
-/// rolls the rows back and the next open runs the hook again. A file that
-/// got its numbers before the failure keeps them, and the next run writes
-/// the same numbers.
-fn measure_books(tx: &Transaction, folder: &Path, report: &Report) -> HookResult {
-    let ids: Vec<i64> = tx
-        .prepare("SELECT id FROM books WHERE id NOT IN (SELECT book_id FROM book_stats)")?
-        .query_map([], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    if ids.is_empty() {
-        return Ok(());
-    }
-    let total = ids.len();
-    report(&format!(
-        "measuring the word count and reading ease of {total} books"
-    ));
-    let mut engines = Engines::default();
-    for (n, id) in ids.into_iter().enumerate() {
-        let path = folder.join(book_file_name(id));
-        let epub = match Epub::open(&path) {
-            Ok(epub) => epub,
-            Err(e) => {
-                report(&format!("skipped book {id}: {e:#}"));
-                continue;
-            }
-        };
-        let record = read_book(tx, id)
-            .map_err(|e| HookError::Hook(format!("{e:#}")))?
-            .metadata;
-        report(&format!("{}/{total} {}", n + 1, record.title));
-        let stats = stats::measure(&epub, &mut engines)
-            .map_err(|e| HookError::Hook(format!("measure book {id}: {e:#}")))?;
-        insert_stats(tx, id, &stats)?;
-        epub.write(&record, &stats)
-            .map_err(|e| HookError::Hook(format!("write book {id}: {e:#}")))?;
-    }
-    Ok(())
-}
-
-/// Fills `book_stats` for every book with no row. Migration 3 left a book
-/// with no row when its OPF used a prefix no element declared, which the
-/// parser rejected then and accepts now. A file that carries numbers gives
-/// them, as at import. A file that carries none is measured and gets the
-/// numbers written in. A book whose file still cannot be read gets no row,
-/// and a line says so. The hook runs inside the migration transaction, as
-/// migration 3 does, with the same rollback on a failure.
-fn fill_skipped_books(tx: &Transaction, folder: &Path, report: &Report) -> HookResult {
-    let ids: Vec<i64> = tx
-        .prepare("SELECT id FROM books WHERE id NOT IN (SELECT book_id FROM book_stats)")?
-        .query_map([], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    if ids.is_empty() {
-        return Ok(());
-    }
-    let total = ids.len();
-    report(&format!(
-        "filling the word count and reading ease of {total} books"
-    ));
-    let mut engines = Engines::default();
-    for (n, id) in ids.into_iter().enumerate() {
-        let path = folder.join(book_file_name(id));
-        let epub = match Epub::open(&path) {
-            Ok(epub) => epub,
-            Err(e) => {
-                report(&format!("skipped book {id}: {e:#}"));
-                continue;
-            }
-        };
-        let record = read_book(tx, id)
-            .map_err(|e| HookError::Hook(format!("{e:#}")))?
-            .metadata;
-        report(&format!("{}/{total} {}", n + 1, record.title));
-        let file_stats = epub.stats();
-        if file_stats.word_count.is_some() {
-            insert_stats(tx, id, &file_stats)?;
-            continue;
-        }
-        let stats = stats::measure(&epub, &mut engines)
-            .map_err(|e| HookError::Hook(format!("measure book {id}: {e:#}")))?;
-        insert_stats(tx, id, &stats)?;
-        epub.write(&record, &stats)
-            .map_err(|e| HookError::Hook(format!("write book {id}: {e:#}")))?;
-    }
-    Ok(())
+fn migrations() -> Migrations<'static> {
+    Migrations::new(vec![M::up(TABLES_SQL)])
 }
 
 /// The name of a book's file in the library folder.
@@ -580,8 +425,6 @@ mod tests {
 
     #[test]
     fn the_migrations_apply_to_an_empty_database() {
-        migrations(PathBuf::new(), Arc::new(|_| {}))
-            .validate()
-            .unwrap();
+        migrations().validate().unwrap();
     }
 }

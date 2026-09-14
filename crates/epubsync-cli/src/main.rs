@@ -163,13 +163,8 @@ fn run(command: Command) -> Result<()> {
     }
 }
 
-/// Opens the library and prints the progress of a long migration.
-fn open_library(config: &Config) -> Result<Library> {
-    Library::open_reporting(config, |line| println!("{line}"))
-}
-
 fn import(config: &Config, path: &Path, force: bool) -> Result<()> {
-    let mut lib = open_library(config)?;
+    let mut lib = Library::open(config)?;
     let files = if path.is_dir() {
         let mut files: Vec<PathBuf> = std::fs::read_dir(path)
             .with_context(|| format!("read {}", path.display()))?
@@ -213,7 +208,7 @@ fn import(config: &Config, path: &Path, force: bool) -> Result<()> {
 }
 
 fn list(config: &Config) -> Result<()> {
-    let lib = open_library(config)?;
+    let lib = Library::open(config)?;
     let progress = lib.progress()?;
     for book in lib.list()? {
         let mut line = book_line(&book);
@@ -244,7 +239,7 @@ fn progress_cell(p: &ProgressRow) -> String {
 }
 
 fn words(config: &Config, book: Option<i64>, device: Option<&str>) -> Result<()> {
-    let lib = open_library(config)?;
+    let lib = Library::open(config)?;
     for w in lib.words(book, device)? {
         let title = w.book_title.as_deref().unwrap_or("");
         let book = w
@@ -294,7 +289,7 @@ impl EditFlags {
 }
 
 fn edit(config: &Config, id: i64, flags: EditFlags) -> Result<()> {
-    let mut lib = open_library(config)?;
+    let mut lib = Library::open(config)?;
     let book = lib.get(id)?;
     let record = if flags.is_empty() {
         edit_in_editor(&book.metadata)?
@@ -400,7 +395,7 @@ fn edit_in_editor(record: &Metadata) -> Result<Metadata> {
 }
 
 fn remove(config: &Config, id: i64, yes: bool) -> Result<()> {
-    let mut lib = open_library(config)?;
+    let mut lib = Library::open(config)?;
     let book = lib.get(id)?;
     if !yes {
         if !std::io::stdin().is_terminal() {
@@ -428,7 +423,7 @@ struct SyncFlags {
 }
 
 fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
-    let mut lib = open_library(config)?;
+    let mut lib = Library::open(config)?;
     let mut kobo = match &flags.device {
         Some(path) => Kobo::at(path)?,
         None => {

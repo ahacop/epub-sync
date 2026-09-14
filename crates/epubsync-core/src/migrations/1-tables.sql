@@ -1,4 +1,4 @@
--- Migration 1: the library tables of the 0.1.6 release.
+-- Migration 1: the library tables.
 
 CREATE TABLE books (
     id INTEGER PRIMARY KEY,
@@ -54,4 +54,13 @@ CREATE TABLE words (
     dict_suffix TEXT,
     looked_up_at TEXT NOT NULL,
     UNIQUE (word, volume_id, looked_up_at)
+);
+
+-- Numbers about a book's text. Import reads them from the file's OPF, or
+-- measures the text and writes them into the file, so the row holds what
+-- the file holds. A book with no known number has no row.
+CREATE TABLE book_stats (
+    book_id INTEGER PRIMARY KEY REFERENCES books(id),
+    word_count INTEGER,
+    reading_ease REAL
 );
