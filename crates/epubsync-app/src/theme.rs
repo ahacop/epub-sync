@@ -6,6 +6,7 @@
 //! between the two color sets. The `view` functions never see the mode: they
 //! pass a closure that takes the theme, and Iced calls it when it draws.
 
+use epubsync_core::device::ReadStatus;
 use iced::font::Weight;
 use iced::widget::{button, container, progress_bar, text, text_input};
 use iced::{Background, Border, Color, Element, Fill, Font, Theme, border};
@@ -131,13 +132,12 @@ pub fn colors(theme: &Theme) -> &'static Colors {
 }
 
 impl Colors {
-    /// The text color and the ground for a progress status: 0 unread,
-    /// 1 reading, 2 finished. Any other value gets the unread pair.
-    pub fn status(&self, status: i64) -> (Color, Color) {
+    /// The text color and the ground for a progress status.
+    pub fn status(&self, status: ReadStatus) -> (Color, Color) {
         match status {
-            1 => (self.reading, self.reading_tint),
-            2 => (self.finished, self.finished_tint),
-            _ => (self.unread, self.unread_tint),
+            ReadStatus::Reading => (self.reading, self.reading_tint),
+            ReadStatus::Finished => (self.finished, self.finished_tint),
+            ReadStatus::Unread => (self.unread, self.unread_tint),
         }
     }
 }
@@ -186,7 +186,7 @@ pub fn vline<'a, M: 'a>() -> Element<'a, M> {
 }
 
 /// The status chip: the status word on its tint, with a 3 px radius.
-pub fn chip(status: i64) -> impl Fn(&Theme) -> container::Style {
+pub fn chip(status: ReadStatus) -> impl Fn(&Theme) -> container::Style {
     move |theme| {
         let (color, tint) = colors(theme).status(status);
         container::Style {
@@ -199,12 +199,12 @@ pub fn chip(status: i64) -> impl Fn(&Theme) -> container::Style {
 }
 
 /// The progress bar: `reading` or `finished` on an `unread_tint` track.
-pub fn bar(status: i64) -> impl Fn(&Theme) -> progress_bar::Style {
+pub fn bar(status: ReadStatus) -> impl Fn(&Theme) -> progress_bar::Style {
     move |theme| {
         let c = colors(theme);
         let fill = match status {
-            2 => c.finished,
-            _ => c.reading,
+            ReadStatus::Finished => c.finished,
+            ReadStatus::Reading | ReadStatus::Unread => c.reading,
         };
         progress_bar::Style {
             background: Background::Color(c.unread_tint),

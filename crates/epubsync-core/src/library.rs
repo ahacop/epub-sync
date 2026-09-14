@@ -1,6 +1,7 @@
 //! The library folder: the book files, the SQLite database, and the lock.
 //! Every command opens the library once and holds the lock until it ends.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::config::{self, Config};
+use crate::device::ReadStatus;
 use crate::metadata::{Author, Metadata, Series};
 use crate::sort_name::sort_name;
 use crate::{epub, kepub, opf, splice};
@@ -98,7 +100,7 @@ impl Library {
 
     /// The path of a book's file in the library folder.
     pub fn book_path(&self, id: i64) -> PathBuf {
-        self.folder.join(format!("{id}.kepub.epub"))
+        self.folder.join(book_file_name(id))
     }
 
     /// Imports an EPUB or KEPUB. See the design for the six steps.
@@ -189,31 +191,10 @@ impl Library {
         epub::rewrite(&path, &file_opf.path, &new_opf)
     }
 
+    /// Every book in id order.
     pub fn list(&self) -> Result<Vec<Book>> {
-        let mut stmt = self.db.prepare(
-            "SELECT id, revision, title, series, series_number, publisher, description FROM books ORDER BY id",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Book {
-                id: row.get(0)?,
-                revision: row.get(1)?,
-                metadata: Metadata {
-                    title: row.get(2)?,
-                    authors: Vec::new(),
-                    series: row
-                        .get::<_, Option<String>>(3)?
-                        .map(|name| Series { name, number: None }),
-                    publisher: row.get(5)?,
-                    description: row.get(6)?,
-                },
-            })
-            .map(|mut b: Book| {
-                if let Some(s) = &mut b.metadata.series {
-                    s.number = row.get(4).ok().flatten();
-                }
-                b
-            })
-        })?;
+        let mut stmt = self.db.prepare(&format!("{BOOK_SELECT} ORDER BY id"))?;
+        let rows = stmt.query_map([], book_from_row)?;
         let mut books = Vec::new();
         for book in rows {
             let mut book = book?;
@@ -224,10 +205,13 @@ impl Library {
     }
 
     pub fn get(&self, id: i64) -> Result<Book> {
-        self.list()?
-            .into_iter()
-            .find(|b| b.id == id)
-            .ok_or_else(|| anyhow!("no book with id {id}"))
+        let mut book = self
+            .db
+            .query_row(&format!("{BOOK_SELECT} WHERE id = ?1"), [id], book_from_row)
+            .optional()?
+            .ok_or_else(|| anyhow!("no book with id {id}"))?;
+        book.metadata.authors = self.authors(id)?;
+        Ok(book)
     }
 
     fn authors(&self, id: i64) -> Result<Vec<Author>> {
@@ -286,6 +270,35 @@ impl Library {
     }
 }
 
+/// The name of a book's file in the library folder.
+pub fn book_file_name(id: i64) -> String {
+    format!("{id}.kepub.epub")
+}
+
+const BOOK_SELECT: &str =
+    "SELECT id, revision, title, series, series_number, publisher, description FROM books";
+
+/// A `books` row as a Book with no authors. The caller fills them in
+/// from `book_authors`.
+fn book_from_row(row: &rusqlite::Row) -> rusqlite::Result<Book> {
+    let series_name: Option<String> = row.get(3)?;
+    let series_number: Option<f64> = row.get(4)?;
+    Ok(Book {
+        id: row.get(0)?,
+        revision: row.get(1)?,
+        metadata: Metadata {
+            title: row.get(2)?,
+            authors: Vec::new(),
+            series: series_name.map(|name| Series {
+                name,
+                number: series_number,
+            }),
+            publisher: row.get(5)?,
+            description: row.get(6)?,
+        },
+    })
+}
+
 fn insert_authors(tx: &rusqlite::Transaction, id: i64, authors: &[Author]) -> Result<()> {
     for (position, author) in authors.iter().enumerate() {
         tx.execute(
@@ -296,13 +309,12 @@ fn insert_authors(tx: &rusqlite::Transaction, id: i64, authors: &[Author]) -> Re
     Ok(())
 }
 
-/// Reading progress for one book on one device.
+/// Reading progress on one device for the book it is keyed by.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgressRow {
-    pub book_id: i64,
     pub device_serial: String,
     pub percent: i64,
-    pub status: i64,
+    pub status: ReadStatus,
     pub last_read: Option<String>,
 }
 
@@ -319,21 +331,29 @@ pub struct WordRow {
 }
 
 impl Library {
-    /// Every progress row, in book id then device order.
-    pub fn progress(&self) -> Result<Vec<ProgressRow>> {
+    /// Every progress row, grouped by book id and in device order within
+    /// a book.
+    pub fn progress(&self) -> Result<BTreeMap<i64, Vec<ProgressRow>>> {
         let mut stmt = self.db.prepare(
             "SELECT book_id, device_serial, percent, status, last_read FROM progress ORDER BY book_id, device_serial",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok(ProgressRow {
-                book_id: r.get(0)?,
-                device_serial: r.get(1)?,
-                percent: r.get(2)?,
-                status: r.get(3)?,
-                last_read: r.get(4)?,
-            })
+            Ok((
+                r.get::<_, i64>(0)?,
+                ProgressRow {
+                    device_serial: r.get(1)?,
+                    percent: r.get(2)?,
+                    status: r.get(3)?,
+                    last_read: r.get(4)?,
+                },
+            ))
         })?;
-        Ok(rows.collect::<Result<_, _>>()?)
+        let mut by_book: BTreeMap<i64, Vec<ProgressRow>> = BTreeMap::new();
+        for row in rows {
+            let (book_id, progress) = row?;
+            by_book.entry(book_id).or_default().push(progress);
+        }
+        Ok(by_book)
     }
 
     /// The looked-up words, newest first, filtered by book id and device

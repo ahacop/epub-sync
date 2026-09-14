@@ -1,10 +1,12 @@
 //! Runs a sync against one device: plan, apply with the `sent` table
 //! updated after each book, then read progress and words back.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result};
 use rusqlite::params;
 
-use crate::device::{Action, BookRevision, Device, ReadBack, RowUpdate};
+use crate::device::{Action, Device, ReadBack, RowUpdate};
 use crate::library::Library;
 
 /// Records the device and returns the actions for it.
@@ -14,24 +16,12 @@ pub fn plan(library: &Library, device: &dyn Device) -> Result<Vec<Action>> {
         "INSERT OR IGNORE INTO devices (serial) VALUES (?1)",
         [serial],
     )?;
-    let books: Vec<BookRevision> = library
-        .list()?
-        .iter()
-        .map(|b| BookRevision {
-            id: b.id,
-            revision: b.revision,
-        })
-        .collect();
+    let books: BTreeMap<i64, i64> = library.list()?.iter().map(|b| (b.id, b.revision)).collect();
     let mut stmt = library
         .db
         .prepare("SELECT book_id, revision FROM sent WHERE device_serial = ?1")?;
-    let sent: Vec<BookRevision> = stmt
-        .query_map([serial], |row| {
-            Ok(BookRevision {
-                id: row.get(0)?,
-                revision: row.get(1)?,
-            })
-        })?
+    let sent: BTreeMap<i64, i64> = stmt
+        .query_map([serial], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<_, _>>()?;
     let on_device = device.list()?;
     Ok(crate::device::plan(&books, &on_device, &sent))

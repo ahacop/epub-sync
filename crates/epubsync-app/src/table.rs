@@ -2,14 +2,15 @@
 //! table view.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
-use epubsync_core::library::ProgressRow;
+use epubsync_core::device::ReadStatus;
+use epubsync_core::library::{Book, ProgressRow};
 use iced::widget::{
     self, Text, button, column, container, progress_bar, responsive, row, scrollable, space, text,
 };
 use iced::{Center, Element, Fill, Length, Right, Size, Task, padding};
 
-use crate::read::Entry;
 use crate::theme::{self, BODY, MONO, SANS_MEDIUM};
 use crate::{Message, Open, format};
 
@@ -95,10 +96,10 @@ pub fn scroll_to_top() -> Task<Message> {
 
 /// The progress row with the greatest `last_read` for a book. A row
 /// without `last_read` counts as the oldest.
-pub fn latest(progress: &[ProgressRow], book_id: i64) -> Option<&ProgressRow> {
+pub fn latest(progress: &BTreeMap<i64, Vec<ProgressRow>>, book_id: i64) -> Option<&ProgressRow> {
     progress
+        .get(&book_id)?
         .iter()
-        .filter(|p| p.book_id == book_id)
         .max_by_key(|p| p.last_read.as_deref())
 }
 
@@ -119,8 +120,7 @@ enum Key {
     Day(String),
 }
 
-fn key(entry: &Entry, column: Column, progress: &[ProgressRow]) -> Option<Key> {
-    let book = &entry.book;
+fn key(book: &Book, column: Column, progress: &BTreeMap<i64, Vec<ProgressRow>>) -> Option<Key> {
     let m = &book.metadata;
     match column {
         Column::Id => Some(Key::Id(book.id)),
@@ -152,8 +152,8 @@ fn compare(a: &Option<Key>, b: &Option<Key>) -> Ordering {
 
 /// Whether the filter text is in the title, an author name, or the
 /// series name. `needle` is already trimmed and in lower case.
-fn matches(entry: &Entry, needle: &str) -> bool {
-    let m = &entry.book.metadata;
+fn matches(book: &Book, needle: &str) -> bool {
+    let m = &book.metadata;
     m.title.to_lowercase().contains(needle)
         || m.authors
             .iter()
@@ -164,13 +164,13 @@ fn matches(entry: &Entry, needle: &str) -> bool {
 }
 
 /// The books the table shows, filtered and sorted. Ties keep id order.
-pub fn order(open: &Open) -> Vec<&Entry> {
+pub fn order(open: &Open) -> Vec<&Book> {
     let needle = open.filter.trim().to_lowercase();
-    let mut rows: Vec<(Option<Key>, &Entry)> = open
+    let mut rows: Vec<(Option<Key>, &Book)> = open
         .books
         .iter()
-        .filter(|e| needle.is_empty() || matches(e, &needle))
-        .map(|e| (key(e, open.sort.column, &open.progress), e))
+        .filter(|b| needle.is_empty() || matches(b, &needle))
+        .map(|b| (key(b, open.sort.column, &open.progress), b))
         .collect();
     // The sort is stable, and the books are in id order.
     rows.sort_by(|(a, _), (b, _)| {
@@ -181,11 +181,11 @@ pub fn order(open: &Open) -> Vec<&Entry> {
             order
         }
     });
-    rows.into_iter().map(|(_, e)| e).collect()
+    rows.into_iter().map(|(_, b)| b).collect()
 }
 
 /// The table: the header row, then the rows in a scrollable column.
-pub fn view<'a>(open: &'a Open, rows: Vec<&'a Entry>) -> Element<'a, Message> {
+pub fn view<'a>(open: &'a Open, rows: Vec<&'a Book>) -> Element<'a, Message> {
     let mut headers = row![space().width(MARK)]
         .height(theme::HEADER)
         .align_y(Center);
@@ -209,7 +209,7 @@ pub fn view<'a>(open: &'a Open, rows: Vec<&'a Entry>) -> Element<'a, Message> {
 /// below them, so the scrollbar and the wheel behave as if every row were
 /// there. Building every row would shape the text of thousands of cells
 /// on each redraw.
-fn body<'a>(open: &'a Open, rows: &[&'a Entry], size: Size) -> Element<'a, Message> {
+fn body<'a>(open: &'a Open, rows: &[&'a Book], size: Size) -> Element<'a, Message> {
     let selected = open.selected.as_ref().map(|s| s.id);
     // One row more than fits, since the first row in view is cut off at
     // the top.
@@ -219,7 +219,7 @@ fn body<'a>(open: &'a Open, rows: &[&'a Entry], size: Size) -> Element<'a, Messa
     let built = column(
         rows[first..last]
             .iter()
-            .map(|e| book_row(e, &open.progress, selected == Some(e.book.id))),
+            .map(|b| book_row(b, &open.progress, selected == Some(b.id))),
     );
     let above = space().height(first as f32 * PITCH);
     let below = space().height((rows.len() - last) as f32 * PITCH);
@@ -263,11 +263,10 @@ fn header<'a>(column: Column, sort: Sort) -> Element<'a, Message> {
 
 /// One row: a button with a cell per column and a 1 px line under it.
 fn book_row<'a>(
-    entry: &'a Entry,
-    progress: &'a [ProgressRow],
+    book: &'a Book,
+    progress: &'a BTreeMap<i64, Vec<ProgressRow>>,
     selected: bool,
 ) -> Element<'a, Message> {
-    let book = &entry.book;
     let m = &book.metadata;
     let latest = latest(progress, book.id);
 
@@ -348,12 +347,12 @@ fn cell<'a>(content: impl Into<Element<'a, Message>>, column: Column) -> Element
 /// row, or one that is not started, shows nothing.
 fn progress_cell<'a>(latest: Option<&'a ProgressRow>) -> Element<'a, Message> {
     match latest {
-        Some(p) if p.status == 2 => text("READ")
+        Some(p) if p.status == ReadStatus::Finished => text("READ")
             .size(11)
             .font(SANS_MEDIUM)
             .style(theme::text_color(|c| c.finished))
             .into(),
-        Some(p) if p.status == 1 => row![
+        Some(p) if p.status == ReadStatus::Reading => row![
             progress_bar(0.0..=100.0, p.percent as f32)
                 .length(64)
                 .girth(4)
@@ -370,7 +369,7 @@ fn progress_cell<'a>(latest: Option<&'a ProgressRow>) -> Element<'a, Message> {
 }
 
 /// The status word in upper case on its tint.
-pub fn chip<'a>(status: i64) -> Element<'a, Message> {
+pub fn chip<'a>(status: ReadStatus) -> Element<'a, Message> {
     container(
         text(format::status(status).to_uppercase())
             .size(11)
@@ -397,25 +396,21 @@ mod tests {
         }
     }
 
-    fn entry(id: i64, title: &str, author: Option<Author>, series: Option<Series>) -> Entry {
-        Entry {
-            book: Book {
-                id,
-                revision: 1,
-                metadata: Metadata {
-                    title: title.into(),
-                    authors: author.into_iter().collect(),
-                    series,
-                    ..Metadata::default()
-                },
+    fn book(id: i64, title: &str, author: Option<Author>, series: Option<Series>) -> Book {
+        Book {
+            id,
+            revision: 1,
+            metadata: Metadata {
+                title: title.into(),
+                authors: author.into_iter().collect(),
+                series,
+                ..Metadata::default()
             },
-            path: PathBuf::from(format!("{id}.kepub.epub")),
         }
     }
 
-    fn progress(book_id: i64, percent: i64, status: i64, last_read: Option<&str>) -> ProgressRow {
+    fn progress(percent: i64, status: ReadStatus, last_read: Option<&str>) -> ProgressRow {
         ProgressRow {
-            book_id,
             device_serial: "N123".into(),
             percent,
             status,
@@ -430,7 +425,7 @@ mod tests {
         Open {
             folder: PathBuf::from("/books"),
             books: vec![
-                entry(
+                book(
                     1,
                     "The Warden",
                     Some(author("Anthony Trollope", "Trollope, Anthony")),
@@ -439,13 +434,13 @@ mod tests {
                         number: Some(1.0),
                     }),
                 ),
-                entry(
+                book(
                     2,
                     "Villette",
                     Some(author("Charlotte Brontë", "Brontë, Charlotte")),
                     None,
                 ),
-                entry(
+                book(
                     3,
                     "A Princess of Mars",
                     Some(author("Edgar Rice Burroughs", "Burroughs, Edgar Rice")),
@@ -455,10 +450,16 @@ mod tests {
                     }),
                 ),
             ],
-            progress: vec![
-                progress(1, 62, 1, Some("2026-09-08")),
-                progress(3, 100, 2, Some("2026-05-12")),
-            ],
+            progress: BTreeMap::from([
+                (
+                    1,
+                    vec![progress(62, ReadStatus::Reading, Some("2026-09-08"))],
+                ),
+                (
+                    3,
+                    vec![progress(100, ReadStatus::Finished, Some("2026-05-12"))],
+                ),
+            ]),
             sort: Sort::default(),
             filter: String::new(),
             scroll: 0.0,
@@ -467,7 +468,7 @@ mod tests {
     }
 
     fn ids(open: &Open) -> Vec<i64> {
-        order(open).iter().map(|e| e.book.id).collect()
+        order(open).iter().map(|b| b.id).collect()
     }
 
     #[test]
@@ -518,11 +519,14 @@ mod tests {
 
     #[test]
     fn latest_row_is_the_one_read_last() {
-        let rows = vec![
-            progress(1, 10, 1, None),
-            progress(1, 62, 1, Some("2026-09-08")),
-            progress(1, 30, 1, Some("2026-07-02")),
-        ];
+        let rows = BTreeMap::from([(
+            1,
+            vec![
+                progress(10, ReadStatus::Reading, None),
+                progress(62, ReadStatus::Reading, Some("2026-09-08")),
+                progress(30, ReadStatus::Reading, Some("2026-07-02")),
+            ],
+        )]);
         assert_eq!(latest(&rows, 1).map(|p| p.percent), Some(62));
         assert_eq!(latest(&rows, 2), None);
     }

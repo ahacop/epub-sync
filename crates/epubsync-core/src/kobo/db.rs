@@ -11,7 +11,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::device::{Progress, RowUpdate, Word};
+use crate::device::{Progress, ReadStatus, RowUpdate, Word};
 use crate::metadata::{Metadata, format_series_number};
 
 /// The `dbversion` values the app has been run against on a real Kobo.
@@ -90,7 +90,9 @@ impl KoboDb {
                     Ok(Progress {
                         book_id,
                         percent: r.get::<_, Option<i64>>(0)?.unwrap_or(0),
-                        status: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                        status: r
+                            .get::<_, Option<ReadStatus>>(1)?
+                            .unwrap_or(ReadStatus::Unread),
                         last_read: r.get(2)?,
                     })
                 },

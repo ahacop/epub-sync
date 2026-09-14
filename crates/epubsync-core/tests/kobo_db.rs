@@ -2,7 +2,7 @@ mod common;
 
 use std::path::Path;
 
-use epubsync_core::device::{Action, Device, RowUpdate};
+use epubsync_core::device::{Action, Device, ReadStatus, RowUpdate};
 use epubsync_core::kobo::Kobo;
 use epubsync_core::kobo::db::{self, KoboDb};
 use epubsync_core::library::{ImportOutcome, Library};
@@ -183,7 +183,7 @@ fn reads_progress() {
     let p = db.progress(VOLUME_1, 1).unwrap().unwrap();
     assert_eq!(
         (p.book_id, p.percent, p.status, p.last_read.as_deref()),
-        (1, 37, 1, Some("2026-09-01T10:00:00Z"))
+        (1, 37, ReadStatus::Reading, Some("2026-09-01T10:00:00Z"))
     );
 }
 

@@ -182,38 +182,28 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
         .find(|n| n.is_element() && n.tag_name().name() == "metadata")
         .ok_or_else(|| anyhow!("the OPF has no metadata element"))?;
 
-    let mut owned: Vec<Range<usize>> = Vec::new();
-
     let title = pick_title(&metadata, &text);
-    if let Some(t) = &title {
-        owned.push(t.range.clone());
-    }
 
-    let mut creators = Vec::new();
-    for node in dc_children(&metadata, "creator") {
-        let id = node.attribute("id").map(str::to_string);
-        let file_as_meta = id
-            .as_deref()
-            .and_then(|id| refinement(&metadata, id, "file-as", &text));
-        let attributes = node
-            .attributes()
-            .map(|a| text[a.range()].to_string())
-            .collect();
-        let creator = Creator {
-            name: node_text(&node),
-            range: node.range(),
-            qname: qname(&node, &text),
-            id,
-            attributes,
-            file_as_attr: node.attribute((NS_OPF, "file-as")).map(str::to_string),
-            file_as_meta,
-        };
-        owned.push(creator.range.clone());
-        if let Some(m) = &creator.file_as_meta {
-            owned.push(m.range.clone());
-        }
-        creators.push(creator);
-    }
+    let creators = dc_children(&metadata, "creator")
+        .map(|node| {
+            let id = node.attribute("id").map(str::to_string);
+            let file_as_meta = id
+                .as_deref()
+                .and_then(|id| refinement(&metadata, id, "file-as", &text));
+            Creator {
+                name: node_text(&node),
+                range: node.range(),
+                qname: qname(&node, &text),
+                id,
+                attributes: node
+                    .attributes()
+                    .map(|a| text[a.range()].to_string())
+                    .collect(),
+                file_as_attr: node.attribute((NS_OPF, "file-as")).map(str::to_string),
+                file_as_meta,
+            }
+        })
+        .collect();
 
     let publisher = dc_children(&metadata, "publisher")
         .next()
@@ -224,42 +214,8 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
     let language = dc_children(&metadata, "language")
         .next()
         .map(|n| node_text(&n));
-    for e in [&publisher, &description].into_iter().flatten() {
-        owned.push(e.range.clone());
-    }
-
     let series = read_series(&metadata, &text);
-    if let Some(s) = &series {
-        match &s.form {
-            SeriesForm::Calibre { name, index } => {
-                owned.push(name.range.clone());
-                if let Some(i) = index {
-                    owned.push(i.range.clone());
-                }
-            }
-            SeriesForm::Collection {
-                collection,
-                collection_type,
-                group_position,
-                ..
-            } => {
-                owned.push(collection.range.clone());
-                for e in [collection_type, group_position].into_iter().flatten() {
-                    owned.push(e.range.clone());
-                }
-            }
-        }
-    }
-
     let cover_path = cover_path(&package, &metadata, path);
-
-    let insert_at = owned.iter().map(|r| r.end).max().unwrap_or_else(|| {
-        text[..metadata.range().end]
-            .rfind("</")
-            .unwrap_or(metadata.range().end)
-    });
-    let indent_from = owned.iter().map(|r| r.start).min().unwrap_or(insert_at);
-    let indent = indent_before(&text, indent_from);
 
     let opf_prefix = [package, metadata]
         .iter()
@@ -273,8 +229,13 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
         .find('>')
         .map(|i| package.range().start + i)
         .ok_or_else(|| anyhow!("the package start tag has no end"))?;
+    // Where an insert goes when the file has no owned element: just
+    // before the metadata close tag.
+    let metadata_close = text[..metadata.range().end]
+        .rfind("</")
+        .unwrap_or(metadata.range().end);
 
-    Ok(Opf {
+    let mut opf = Opf {
         path: path.to_string(),
         text,
         version,
@@ -285,12 +246,19 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
         language,
         series,
         cover_path,
-        insert_at,
-        indent,
+        insert_at: metadata_close,
+        indent: String::new(),
         opf_prefix,
         dc_prefix,
         package_tag_end,
-    })
+    };
+    let owned = opf.owned_ranges();
+    if let Some(last) = owned.last() {
+        opf.insert_at = last.end;
+    }
+    let indent_from = owned.first().map(|r| r.start).unwrap_or(opf.insert_at);
+    opf.indent = indent_before(&opf.text, indent_from);
+    Ok(opf)
 }
 
 impl Opf {
@@ -489,7 +457,7 @@ fn join_path(opf_path: &str, href: &str) -> String {
 
 /// The newline and the spaces or tabs between it and `at`. When `at` does
 /// not follow a newline and indentation, returns a newline and two spaces.
-fn indent_before(text: &str, at: usize) -> String {
+pub(crate) fn indent_before(text: &str, at: usize) -> String {
     let before = &text[..at];
     let ws_start = before.trim_end_matches([' ', '\t']).len();
     if before[..ws_start].ends_with('\n') {

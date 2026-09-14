@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use epubsync_core::config::{self, Config};
-use epubsync_core::device::{Action, Device, RowUpdate};
+use epubsync_core::device::{Action, Device, ReadStatus, RowUpdate};
 use epubsync_core::kobo::eject::Ejected;
 use epubsync_core::kobo::{self, Kobo};
 use epubsync_core::library::{Book, ImportOutcome, Library, ProgressRow};
@@ -212,7 +212,7 @@ fn list(config: &Config) -> Result<()> {
     let progress = lib.progress()?;
     for book in lib.list()? {
         let mut line = book_line(&book);
-        for p in progress.iter().filter(|p| p.book_id == book.id) {
+        for p in progress.get(&book.id).into_iter().flatten() {
             line.push_str(&format!("  {}", progress_cell(p)));
         }
         println!("{line}");
@@ -224,10 +224,9 @@ fn list(config: &Config) -> Result<()> {
 /// day last read.
 fn progress_cell(p: &ProgressRow) -> String {
     let status = match p.status {
-        0 => "unread",
-        1 => "reading",
-        2 => "finished",
-        _ => "status ?",
+        ReadStatus::Unread => "unread",
+        ReadStatus::Reading => "reading",
+        ReadStatus::Finished => "finished",
     };
     let day = p
         .last_read

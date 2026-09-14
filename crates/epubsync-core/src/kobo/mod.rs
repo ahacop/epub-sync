@@ -6,6 +6,7 @@
 pub mod db;
 pub mod eject;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
@@ -132,18 +133,16 @@ impl Device for Kobo {
         &self.serial
     }
 
-    fn list(&self) -> Result<Vec<i64>> {
+    fn list(&self) -> Result<BTreeSet<i64>> {
         let entries = match std::fs::read_dir(self.folder()) {
             Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
             Err(e) => return Err(e).with_context(|| format!("read {}", self.folder().display())),
         };
-        let mut ids: Vec<i64> = entries
+        Ok(entries
             .filter_map(|e| e.ok())
             .filter_map(|e| id_from_file_name(&e.file_name().to_string_lossy()))
-            .collect();
-        ids.sort();
-        Ok(ids)
+            .collect())
     }
 
     fn apply(&mut self, action: &Action, source: &Path) -> Result<()> {

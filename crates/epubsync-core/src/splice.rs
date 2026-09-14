@@ -9,7 +9,7 @@
 use std::ops::Range;
 
 use crate::metadata::{Metadata, format_series_number};
-use crate::opf::{Creator, Element, NS_OPF, Opf, SeriesForm, Version};
+use crate::opf::{Creator, Element, NS_OPF, Opf, SeriesForm, Version, indent_before};
 
 /// One change to the text: the bytes in `range` become `text`.
 struct Edit {
@@ -374,17 +374,6 @@ fn calibre_index_meta(n: f64) -> String {
         r#"<meta name="calibre:series_index" content="{}"/>"#,
         format_series_number(n)
     )
-}
-
-/// The newline and indentation before `at`, or a newline and two spaces.
-fn indent_before(text: &str, at: usize) -> String {
-    let before = &text[..at];
-    let ws_start = before.trim_end_matches([' ', '\t']).len();
-    if before[..ws_start].ends_with('\n') {
-        format!("\n{}", &before[ws_start..])
-    } else {
-        "\n  ".to_string()
-    }
 }
 
 /// Makes ids that no element in the text already uses.

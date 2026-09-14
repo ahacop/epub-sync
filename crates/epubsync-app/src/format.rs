@@ -1,5 +1,6 @@
 //! The small text formatters the panes share.
 
+use epubsync_core::device::ReadStatus;
 use epubsync_core::metadata::{Author, Series, format_series_number};
 
 /// "2026-09-08" becomes "8 Sep". The input is the first ten characters of
@@ -18,12 +19,11 @@ pub fn day(date: &str) -> String {
 }
 
 /// The word for a progress status.
-pub fn status(status: i64) -> &'static str {
+pub fn status(status: ReadStatus) -> &'static str {
     match status {
-        0 => "unread",
-        1 => "reading",
-        2 => "finished",
-        _ => "?",
+        ReadStatus::Unread => "unread",
+        ReadStatus::Reading => "reading",
+        ReadStatus::Finished => "finished",
     }
 }
 
@@ -82,10 +82,9 @@ mod tests {
 
     #[test]
     fn status_words() {
-        assert_eq!(status(0), "unread");
-        assert_eq!(status(1), "reading");
-        assert_eq!(status(2), "finished");
-        assert_eq!(status(7), "?");
+        assert_eq!(status(ReadStatus::Unread), "unread");
+        assert_eq!(status(ReadStatus::Reading), "reading");
+        assert_eq!(status(ReadStatus::Finished), "finished");
     }
 
     #[test]

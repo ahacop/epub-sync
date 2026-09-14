@@ -1,16 +1,17 @@
 //! The sidebar: the selected book's details, its description, and its
 //! progress on each device.
 
-use epubsync_core::library::ProgressRow;
+use std::collections::BTreeMap;
+
+use epubsync_core::library::{Book, ProgressRow, book_file_name};
 use epubsync_core::metadata::format_series_number;
 use iced::widget::{
     button, column, container, markdown, progress_bar, row, scrollable, space, text,
 };
 use iced::{Center, Color, Element, Fill, padding};
 
-use crate::read::Entry;
 use crate::theme::{self, MONO, SANS_MEDIUM, SERIF, SERIF_MEDIUM};
-use crate::{Message, Selected, format, table};
+use crate::{Message, Open, Selected, format, table};
 
 const WIDTH: f32 = 360.0;
 /// The side padding of the header, the body, and the footer.
@@ -23,17 +24,13 @@ const LINK: Color = Color::from_rgb8(0x4A, 0x8F, 0xA0);
 
 /// The sidebar: a header, a scrollable body, and a footer, with a 1 px
 /// line on its left.
-pub fn view<'a>(
-    entry: &'a Entry,
-    selected: &'a Selected,
-    progress: &'a [ProgressRow],
-) -> Element<'a, Message> {
+pub fn view<'a>(open: &'a Open, book: &'a Book, selected: &'a Selected) -> Element<'a, Message> {
     let pane = column![
-        header(entry.book.id),
+        header(book.id),
         theme::hline(),
-        scrollable(body(entry, selected, progress)).height(Fill),
+        scrollable(body(book, selected, &open.progress)).height(Fill),
         theme::hline(),
-        footer(entry),
+        footer(open, book),
     ];
     row![
         theme::vline(),
@@ -64,11 +61,10 @@ fn header<'a>(id: i64) -> Element<'a, Message> {
 }
 
 fn body<'a>(
-    entry: &'a Entry,
+    book: &'a Book,
     selected: &'a Selected,
-    progress: &'a [ProgressRow],
+    progress: &'a BTreeMap<i64, Vec<ProgressRow>>,
 ) -> Element<'a, Message> {
-    let book = &entry.book;
     let m = &book.metadata;
 
     let title = text(&m.title).size(26).font(SERIF_MEDIUM).line_height(1.15);
@@ -97,12 +93,10 @@ fn body<'a>(
         };
         meta = meta.push(field("Series", text(value).size(12.5)));
     }
-    let file = entry
-        .path
-        .file_name()
-        .map(|f| f.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    meta = meta.push(field("File", text(file).font(MONO).size(11.5)));
+    meta = meta.push(field(
+        "File",
+        text(book_file_name(book.id)).font(MONO).size(11.5),
+    ));
 
     let description: Element<'a, Message> = if selected.description.is_empty() {
         text("No description in the file.")
@@ -121,7 +115,7 @@ fn body<'a>(
             .style(theme::text_color(|c| c.muted))
     ]
     .spacing(8);
-    let rows: Vec<&ProgressRow> = progress.iter().filter(|p| p.book_id == book.id).collect();
+    let rows = progress.get(&book.id).map(Vec::as_slice).unwrap_or(&[]);
     if rows.is_empty() {
         devices = devices.push(
             text("Not yet sent to a device.")
@@ -129,7 +123,7 @@ fn body<'a>(
                 .style(theme::text_color(|c| c.faint)),
         );
     }
-    for (i, p) in rows.into_iter().enumerate() {
+    for (i, p) in rows.iter().enumerate() {
         if i > 0 {
             devices = devices.push(theme::hline());
         }
@@ -208,9 +202,10 @@ fn description_settings() -> markdown::Settings {
 }
 
 /// The full file path on one line, clipped.
-fn footer(entry: &Entry) -> Element<'_, Message> {
+fn footer<'a>(open: &'a Open, book: &'a Book) -> Element<'a, Message> {
+    let path = open.folder.join(book_file_name(book.id));
     container(
-        text(entry.path.display().to_string())
+        text(path.display().to_string())
             .font(MONO)
             .size(11)
             .wrapping(text::Wrapping::None)

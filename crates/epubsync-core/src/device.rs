@@ -1,6 +1,7 @@
 //! The device layer: the trait a device type implements, and the plan
 //! that compares the device with the library.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -31,11 +32,44 @@ impl Action {
     }
 }
 
-/// A library book as the plan sees it.
+/// How far the reader is through a book, as the Kobo classes it. The
+/// Kobo stores it as 0, 1, or 2, and so does the library database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BookRevision {
-    pub id: i64,
-    pub revision: i64,
+pub enum ReadStatus {
+    Unread,
+    Reading,
+    Finished,
+}
+
+impl ReadStatus {
+    /// The stored value. A value other than 1 or 2 reads as unread.
+    pub fn from_i64(n: i64) -> ReadStatus {
+        match n {
+            1 => ReadStatus::Reading,
+            2 => ReadStatus::Finished,
+            _ => ReadStatus::Unread,
+        }
+    }
+
+    pub fn as_i64(self) -> i64 {
+        match self {
+            ReadStatus::Unread => 0,
+            ReadStatus::Reading => 1,
+            ReadStatus::Finished => 2,
+        }
+    }
+}
+
+impl rusqlite::types::FromSql for ReadStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        Ok(ReadStatus::from_i64(i64::column_result(value)?))
+    }
+}
+
+impl rusqlite::ToSql for ReadStatus {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.as_i64().into())
+    }
 }
 
 /// Reading progress for one book, as read from the device.
@@ -43,7 +77,7 @@ pub struct BookRevision {
 pub struct Progress {
     pub book_id: i64,
     pub percent: i64,
-    pub status: i64,
+    pub status: ReadStatus,
     pub last_read: Option<String>,
 }
 
@@ -81,7 +115,7 @@ pub struct ReadBack {
 pub trait Device {
     fn serial(&self) -> &str;
     /// The ids of the books in the device folder.
-    fn list(&self) -> Result<Vec<i64>>;
+    fn list(&self) -> Result<BTreeSet<i64>>;
     /// Runs one action. `source` is the library file for a send or a
     /// replace, and unused for a delete.
     fn apply(&mut self, action: &Action, source: &Path) -> Result<()>;
@@ -99,62 +133,59 @@ pub trait Device {
 }
 
 /// Compares the library, the device folder, and the `sent` table, and
-/// returns the actions in id order. Pure: no I/O.
-pub fn plan(books: &[BookRevision], on_device: &[i64], sent: &[BookRevision]) -> Vec<Action> {
-    let mut actions = Vec::new();
-    for book in books {
-        let present = on_device.contains(&book.id);
-        let sent_revision = sent.iter().find(|s| s.id == book.id).map(|s| s.revision);
-        match (present, sent_revision) {
-            (false, None) => actions.push(Action::Send {
-                id: book.id,
-                revision: book.revision,
-            }),
-            (false, Some(_)) => actions.push(Action::SendAgain {
-                id: book.id,
-                revision: book.revision,
-            }),
-            (true, Some(r)) if r == book.revision => {}
-            (true, _) => actions.push(Action::Replace {
-                id: book.id,
-                revision: book.revision,
-            }),
-        }
-    }
-    for id in on_device {
-        if !books.iter().any(|b| b.id == *id) {
-            actions.push(Action::Delete { id: *id });
-        }
-    }
-    actions.sort_by_key(Action::id);
-    actions
+/// returns the actions in id order. Pure: no I/O. `books` and `sent` map
+/// a book id to a revision.
+pub fn plan(
+    books: &BTreeMap<i64, i64>,
+    on_device: &BTreeSet<i64>,
+    sent: &BTreeMap<i64, i64>,
+) -> Vec<Action> {
+    let ids: BTreeSet<i64> = books.keys().chain(on_device).copied().collect();
+    ids.into_iter()
+        .filter_map(
+            |id| match (books.get(&id), on_device.contains(&id), sent.get(&id)) {
+                (None, _, _) => Some(Action::Delete { id }),
+                (Some(&revision), false, None) => Some(Action::Send { id, revision }),
+                (Some(&revision), false, Some(_)) => Some(Action::SendAgain { id, revision }),
+                (Some(revision), true, Some(sent)) if sent == revision => None,
+                (Some(&revision), true, _) => Some(Action::Replace { id, revision }),
+            },
+        )
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn b(id: i64, revision: i64) -> BookRevision {
-        BookRevision { id, revision }
+    fn revisions(pairs: &[(i64, i64)]) -> BTreeMap<i64, i64> {
+        pairs.iter().copied().collect()
+    }
+
+    fn ids(ids: &[i64]) -> BTreeSet<i64> {
+        ids.iter().copied().collect()
     }
 
     #[test]
     fn sends_a_new_book() {
         assert_eq!(
-            plan(&[b(1, 1)], &[], &[]),
+            plan(&revisions(&[(1, 1)]), &ids(&[]), &revisions(&[])),
             vec![Action::Send { id: 1, revision: 1 }]
         );
     }
 
     #[test]
     fn does_nothing_for_a_book_at_the_sent_revision() {
-        assert_eq!(plan(&[b(1, 2)], &[1], &[b(1, 2)]), vec![]);
+        assert_eq!(
+            plan(&revisions(&[(1, 2)]), &ids(&[1]), &revisions(&[(1, 2)])),
+            vec![]
+        );
     }
 
     #[test]
     fn replaces_a_book_whose_revision_changed() {
         assert_eq!(
-            plan(&[b(1, 3)], &[1], &[b(1, 2)]),
+            plan(&revisions(&[(1, 3)]), &ids(&[1]), &revisions(&[(1, 2)])),
             vec![Action::Replace { id: 1, revision: 3 }]
         );
     }
@@ -162,7 +193,7 @@ mod tests {
     #[test]
     fn replaces_a_device_file_with_no_sent_row() {
         assert_eq!(
-            plan(&[b(1, 1)], &[1], &[]),
+            plan(&revisions(&[(1, 1)]), &ids(&[1]), &revisions(&[])),
             vec![Action::Replace { id: 1, revision: 1 }]
         );
     }
@@ -170,22 +201,25 @@ mod tests {
     #[test]
     fn sends_again_a_book_deleted_on_the_device() {
         assert_eq!(
-            plan(&[b(1, 1)], &[], &[b(1, 1)]),
+            plan(&revisions(&[(1, 1)]), &ids(&[]), &revisions(&[(1, 1)])),
             vec![Action::SendAgain { id: 1, revision: 1 }]
         );
     }
 
     #[test]
     fn deletes_a_device_file_with_no_book() {
-        assert_eq!(plan(&[], &[7], &[b(7, 1)]), vec![Action::Delete { id: 7 }]);
+        assert_eq!(
+            plan(&revisions(&[]), &ids(&[7]), &revisions(&[(7, 1)])),
+            vec![Action::Delete { id: 7 }]
+        );
     }
 
     #[test]
     fn orders_by_id() {
         let actions = plan(
-            &[b(1, 1), b(2, 2), b(3, 1)],
-            &[2, 3, 9],
-            &[b(2, 1), b(3, 1)],
+            &revisions(&[(1, 1), (2, 2), (3, 1)]),
+            &ids(&[2, 3, 9]),
+            &revisions(&[(2, 1), (3, 1)]),
         );
         assert_eq!(
             actions,

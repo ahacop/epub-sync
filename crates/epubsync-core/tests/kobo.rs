@@ -42,12 +42,15 @@ fn list_parses_ids_from_file_names() {
     let dir = tempfile::tempdir().unwrap();
     let root = fake_kobo(dir.path(), "KOBOeReader", "N1");
     let kobo = Kobo::at(&root).unwrap();
-    assert_eq!(kobo.list().unwrap(), vec![]);
+    assert!(kobo.list().unwrap().is_empty());
     std::fs::create_dir_all(kobo.folder()).unwrap();
     for name in ["3.kepub.epub", "12.kepub.epub", "notes.txt", "x.kepub.epub"] {
         std::fs::write(kobo.folder().join(name), b"").unwrap();
     }
-    assert_eq!(kobo.list().unwrap(), vec![3, 12]);
+    assert_eq!(
+        kobo.list().unwrap().into_iter().collect::<Vec<_>>(),
+        vec![3, 12]
+    );
     assert_eq!(
         kobo.volume_id(3),
         "file:///mnt/onboard/EpubSync/3.kepub.epub"

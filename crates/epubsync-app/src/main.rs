@@ -5,19 +5,19 @@
 mod description;
 mod detail;
 mod format;
-mod read;
 mod table;
 mod theme;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use epubsync_core::config;
-use epubsync_core::library::{Library, ProgressRow};
+use epubsync_core::device::ReadStatus;
+use epubsync_core::library::{Book, Library, ProgressRow};
 use iced::keyboard::{self, key};
 use iced::widget::{column, container, markdown, row, space, text, text_input};
 use iced::{Center, Element, Fill, Subscription, Task, padding};
 
-use crate::read::Entry;
 use crate::table::{Column, Sort};
 use crate::theme::{BODY, MONO, SANS_SEMIBOLD};
 
@@ -36,9 +36,9 @@ struct Open {
     /// The library folder. The status bar shows it.
     folder: PathBuf,
     /// The books in id order. The table sorts a borrowed view.
-    books: Vec<Entry>,
-    /// Reading progress, one row per book per device.
-    progress: Vec<ProgressRow>,
+    books: Vec<Book>,
+    /// Reading progress by book id, one row per device.
+    progress: BTreeMap<i64, Vec<ProgressRow>>,
     sort: Sort,
     /// The filter field's text.
     filter: String,
@@ -108,11 +108,10 @@ fn subscription(_viewer: &Viewer) -> Subscription<Message> {
 fn open() -> anyhow::Result<(Library, Viewer)> {
     let config = config::load()?;
     let library = Library::open(&config)?;
-    let (books, progress) = read::lists(&library)?;
     let open = Open {
         folder: library.folder.clone(),
-        books,
-        progress,
+        books: library.list()?,
+        progress: library.progress()?,
         sort: Sort::default(),
         filter: String::new(),
         scroll: 0.0,
@@ -131,8 +130,8 @@ fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
             let html = open
                 .books
                 .iter()
-                .find(|e| e.book.id == id)
-                .and_then(|e| e.book.metadata.description.as_deref())
+                .find(|b| b.id == id)
+                .and_then(|b| b.metadata.description.as_deref())
                 .unwrap_or("");
             open.selected = Some(Selected {
                 id,
@@ -168,13 +167,13 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
         Viewer::Open(open) => {
             let rows = table::order(open);
             let shown = open.selected.as_ref().and_then(|s| {
-                let entry = open.books.iter().find(|e| e.book.id == s.id)?;
-                Some((entry, s))
+                let book = open.books.iter().find(|b| b.id == s.id)?;
+                Some((book, s))
             });
             let shown_count = rows.len();
             let mut main = row![table::view(open, rows)].height(Fill);
-            if let Some((entry, selected)) = shown {
-                main = main.push(detail::view(entry, selected, &open.progress));
+            if let Some((book, selected)) = shown {
+                main = main.push(detail::view(open, book, selected));
             }
             column![toolbar(open, shown_count), main, status_bar(open)].into()
         }
@@ -221,17 +220,21 @@ fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
 /// The status bar: the count, how many books are reading and finished,
 /// and the library folder.
 fn status_bar(open: &Open) -> Element<'_, Message> {
-    let has_status = |status: i64| {
+    let has_status = |status: ReadStatus| {
         open.books
             .iter()
-            .filter(|e| {
+            .filter(|b| {
                 open.progress
-                    .iter()
-                    .any(|p| p.book_id == e.book.id && p.status == status)
+                    .get(&b.id)
+                    .is_some_and(|rows| rows.iter().any(|p| p.status == status))
             })
             .count()
     };
-    let counts = format!("{} reading · {} finished", has_status(1), has_status(2));
+    let counts = format!(
+        "{} reading · {} finished",
+        has_status(ReadStatus::Reading),
+        has_status(ReadStatus::Finished)
+    );
     let bar = row![
         text(books(open.books.len()))
             .size(11.5)
