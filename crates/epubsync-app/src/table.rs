@@ -20,17 +20,21 @@ pub enum Column {
     Title,
     Author,
     Series,
+    Words,
+    Ease,
     Progress,
     LastRead,
 }
 
 impl Column {
     /// The columns from left to right.
-    pub const ALL: [Column; 6] = [
+    pub const ALL: [Column; 8] = [
         Column::Id,
         Column::Title,
         Column::Author,
         Column::Series,
+        Column::Words,
+        Column::Ease,
         Column::Progress,
         Column::LastRead,
     ];
@@ -41,6 +45,8 @@ impl Column {
             Column::Title => "Title",
             Column::Author => "Author",
             Column::Series => "Series",
+            Column::Words => "Words",
+            Column::Ease => "Ease",
             Column::Progress => "Progress",
             Column::LastRead => "Last read",
         }
@@ -53,6 +59,8 @@ impl Column {
             Column::Title => Length::FillPortion(32),
             Column::Author => Length::FillPortion(20),
             Column::Series => Length::FillPortion(18),
+            Column::Words => Length::Fixed(88.0),
+            Column::Ease => Length::Fixed(64.0),
             Column::Progress => Length::Fixed(200.0),
             Column::LastRead => Length::Fixed(108.0),
         }
@@ -116,6 +124,8 @@ enum Key {
     Title(String),
     Author(String),
     Series(String, Option<f64>),
+    Words(u64),
+    Ease(f64),
     Percent(i64),
     Day(String),
 }
@@ -133,6 +143,8 @@ fn key(book: &Book, column: Column, progress: &BTreeMap<i64, Vec<ProgressRow>>) 
             .series
             .as_ref()
             .map(|s| Key::Series(s.name.to_lowercase(), s.number)),
+        Column::Words => book.stats.word_count.map(Key::Words),
+        Column::Ease => book.stats.reading_ease.map(Key::Ease),
         Column::Progress => latest(progress, book.id).map(|p| Key::Percent(p.percent)),
         Column::LastRead => latest(progress, book.id)
             .and_then(day_of)
@@ -294,6 +306,20 @@ fn book_row<'a>(
         }
         None => space().into(),
     };
+    let words = line(
+        book.stats
+            .word_count
+            .map(format::thousands)
+            .unwrap_or_default(),
+    )
+    .style(theme::text_color(|c| c.muted));
+    let ease = line(
+        book.stats
+            .reading_ease
+            .map(|s| format!("{s:.0}"))
+            .unwrap_or_default(),
+    )
+    .style(theme::text_color(|c| c.muted));
     let last_read = line(latest.and_then(day_of).map(format::day).unwrap_or_default())
         .style(theme::text_color(|c| c.muted));
 
@@ -303,6 +329,8 @@ fn book_row<'a>(
         cell(title, Column::Title),
         cell(author, Column::Author),
         cell(series, Column::Series),
+        cell(words, Column::Words),
+        cell(ease, Column::Ease),
         cell(progress_cell(latest), Column::Progress),
         cell(last_read, Column::LastRead),
     ]
@@ -327,8 +355,8 @@ fn line<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
 }
 
 /// A cell: the column's width, the row's full height with the content
-/// centered in it, 12 px side padding, one line, clipped. The id column
-/// is right-aligned.
+/// centered in it, 12 px side padding, one line, clipped. The number
+/// columns are right-aligned.
 fn cell<'a>(content: impl Into<Element<'a, Message>>, column: Column) -> Element<'a, Message> {
     let mut cell = container(content)
         .width(column.width())
@@ -336,7 +364,7 @@ fn cell<'a>(content: impl Into<Element<'a, Message>>, column: Column) -> Element
         .align_y(Center)
         .padding(padding::horizontal(12))
         .clip(true);
-    if column == Column::Id {
+    if matches!(column, Column::Id | Column::Words | Column::Ease) {
         cell = cell.align_x(Right);
     }
     cell.into()
@@ -396,7 +424,13 @@ mod tests {
         }
     }
 
-    fn book(id: i64, title: &str, author: Option<Author>, series: Option<Series>) -> Book {
+    fn book(
+        id: i64,
+        title: &str,
+        author: Option<Author>,
+        series: Option<Series>,
+        stats: Stats,
+    ) -> Book {
         Book {
             id,
             revision: 1,
@@ -406,7 +440,7 @@ mod tests {
                 series,
                 ..Metadata::default()
             },
-            stats: Stats::default(),
+            stats,
         }
     }
 
@@ -419,9 +453,10 @@ mod tests {
         }
     }
 
-    /// Three books: The Warden (Trollope, Barsetshire 1, 62% reading),
-    /// Villette (Brontë, no series, no progress), and A Princess of Mars
-    /// (Burroughs, Martian 1, 100% finished).
+    /// Three books: The Warden (Trollope, Barsetshire 1, 62% reading,
+    /// 72,000 words, ease 61), Villette (Brontë, no series, no progress,
+    /// 196,000 words, ease 55), and A Princess of Mars (Burroughs,
+    /// Martian 1, 100% finished, no stats).
     fn library() -> Open {
         Open {
             folder: PathBuf::from("/books"),
@@ -434,12 +469,20 @@ mod tests {
                         name: "Chronicles of Barsetshire".into(),
                         number: Some(1.0),
                     }),
+                    Stats {
+                        word_count: Some(72_000),
+                        reading_ease: Some(61.0),
+                    },
                 ),
                 book(
                     2,
                     "Villette",
                     Some(author("Charlotte Brontë", "Brontë, Charlotte")),
                     None,
+                    Stats {
+                        word_count: Some(196_000),
+                        reading_ease: Some(55.0),
+                    },
                 ),
                 book(
                     3,
@@ -449,6 +492,7 @@ mod tests {
                         name: "Martian".into(),
                         number: Some(1.0),
                     }),
+                    Stats::default(),
                 ),
             ],
             progress: BTreeMap::from([
@@ -500,6 +544,22 @@ mod tests {
         open.sort.column = Column::Series;
         // Chronicles of Barsetshire, Martian, then Villette
         assert_eq!(ids(&open), vec![1, 3, 2]);
+    }
+
+    #[test]
+    fn words_order_puts_a_book_without_stats_last() {
+        let mut open = library();
+        open.sort.column = Column::Words;
+        // 72,000, 196,000, then A Princess of Mars
+        assert_eq!(ids(&open), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn ease_order_puts_a_book_without_stats_last() {
+        let mut open = library();
+        open.sort.column = Column::Ease;
+        // 55, 61, then A Princess of Mars
+        assert_eq!(ids(&open), vec![2, 1, 3]);
     }
 
     #[test]
