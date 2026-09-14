@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -13,6 +14,7 @@ use crate::config::{self, Config};
 use crate::device::ReadStatus;
 use crate::metadata::{Author, Metadata, Series};
 use crate::sort_name::sort_name;
+use crate::stats::Engines;
 pub use crate::stats::Stats;
 use crate::{epub, kepub, opf, splice, stats};
 
@@ -22,6 +24,10 @@ const MEASURE_BOOKS_SQL: &str = include_str!("migrations/3-measure-books.sql");
 const DB_NAME: &str = "library.sqlite";
 const LOCK_NAME: &str = "lock";
 const IMPORT_TEMP: &str = "import.tmp";
+
+/// Receives one line per step of a migration that takes a while, such as
+/// the one that measures every book. The CLI prints the lines.
+pub type Report = Arc<dyn Fn(&str) + Send + Sync>;
 
 pub struct Library {
     pub folder: PathBuf,
@@ -66,8 +72,18 @@ impl Library {
 
     /// Opens the library named by the config, taking the exclusive lock,
     /// and runs the migrations the database is missing. A missing
-    /// database file is created and gets every migration.
+    /// database file is created and gets every migration. Migration
+    /// progress is not reported.
     pub fn open(config: &Config) -> Result<Library> {
+        Library::open_reporting(config, |_| {})
+    }
+
+    /// Opens the library like `open`, and passes each progress line of a
+    /// long migration to `report`.
+    pub fn open_reporting(
+        config: &Config,
+        report: impl Fn(&str) + Send + Sync + 'static,
+    ) -> Result<Library> {
         let folder = config.library.clone();
         let lock_path = folder.join(LOCK_NAME);
         let lock_file = File::options()
@@ -92,7 +108,7 @@ impl Library {
         let mut db =
             Connection::open(&db_path).with_context(|| format!("open {}", db_path.display()))?;
         stamp_unversioned(&db)?;
-        migrations(folder.clone())
+        migrations(folder.clone(), Arc::new(report))
             .to_latest(&mut db)
             .context("migrate the database")?;
         // Foreign keys go on after the migrations, as SQLite advises for
@@ -119,7 +135,7 @@ impl Library {
         let file_stats = Stats::from_opf(&source_opf);
         let measured = file_stats.word_count.is_none();
         let stats = if measured {
-            stats::measure(source, &source_opf)
+            stats::measure(source, &source_opf, &mut Engines::default())
                 .with_context(|| format!("measure {}", source.display()))?
         } else {
             file_stats
@@ -203,7 +219,10 @@ impl Library {
 
     /// Splices the record and the stats into the book's file.
     fn write_file(&self, id: i64, record: &Metadata, stats: &Stats) -> Result<()> {
-        write_file(&self.folder, id, record, stats)
+        let path = self.book_path(id);
+        let file_opf = opf::read(&path)?;
+        let new_opf = splice::splice(&file_opf, record, stats);
+        epub::rewrite(&path, &file_opf.path, &new_opf)
     }
 
     /// Every book in id order.
@@ -276,14 +295,16 @@ impl Library {
 /// them the database has, and `Library::open` runs the rest. Each one
 /// runs in a transaction, so a change that fails leaves the database as
 /// it was.
-fn migrations(folder: PathBuf) -> Migrations<'static> {
+fn migrations(folder: PathBuf, report: Report) -> Migrations<'static> {
     Migrations::new(vec![
         M::up(TABLES_SQL),
         M::up_with_hook(BOOK_STATS_SQL, {
             let folder = folder.clone();
             move |tx| fill_book_stats(tx, &folder)
         }),
-        M::up_with_hook(MEASURE_BOOKS_SQL, move |tx| measure_books(tx, &folder)),
+        M::up_with_hook(MEASURE_BOOKS_SQL, move |tx| {
+            measure_books(tx, &folder, &report)
+        }),
     ])
 }
 
@@ -321,37 +342,46 @@ fn fill_book_stats(tx: &Transaction, folder: &Path) -> HookResult {
 }
 
 /// Measures every book with no `book_stats` row, inserts the row, and
-/// writes the numbers into the file. The hook runs inside the migration
-/// transaction, so a file that fails rolls the rows back and the next open
-/// runs the hook again. A file that got its numbers before the failure
-/// keeps them, and the next run writes the same numbers.
-fn measure_books(tx: &Transaction, folder: &Path) -> HookResult {
+/// writes the numbers into the file. A book whose OPF cannot be read gets
+/// no row, as in migration 2, and a line says so. The hook runs inside the
+/// migration transaction, so a measurement or a file write that fails
+/// rolls the rows back and the next open runs the hook again. A file that
+/// got its numbers before the failure keeps them, and the next run writes
+/// the same numbers.
+fn measure_books(tx: &Transaction, folder: &Path, report: &Report) -> HookResult {
     let ids: Vec<i64> = tx
         .prepare("SELECT id FROM books WHERE id NOT IN (SELECT book_id FROM book_stats)")?
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
-    for id in ids {
-        measure_book(tx, folder, id)
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let total = ids.len();
+    report(&format!(
+        "measuring the word count and reading ease of {total} books"
+    ));
+    let mut engines = Engines::default();
+    for (n, id) in ids.into_iter().enumerate() {
+        let path = folder.join(book_file_name(id));
+        let file_opf = match opf::read(&path) {
+            Ok(file_opf) => file_opf,
+            Err(e) => {
+                report(&format!("skipped book {id}: {e:#}"));
+                continue;
+            }
+        };
+        let record = read_book(tx, id)
+            .map_err(|e| HookError::Hook(format!("{e:#}")))?
+            .metadata;
+        report(&format!("{}/{total} {}", n + 1, record.title));
+        let stats = stats::measure(&path, &file_opf, &mut engines)
             .map_err(|e| HookError::Hook(format!("measure book {id}: {e:#}")))?;
+        insert_stats(tx, id, &stats)?;
+        let new_opf = splice::splice(&file_opf, &record, &stats);
+        epub::rewrite(&path, &file_opf.path, &new_opf)
+            .map_err(|e| HookError::Hook(format!("write book {id}: {e:#}")))?;
     }
     Ok(())
-}
-
-fn measure_book(tx: &Transaction, folder: &Path, id: i64) -> Result<()> {
-    let path = folder.join(book_file_name(id));
-    let file_opf = opf::read(&path)?;
-    let stats = stats::measure(&path, &file_opf)?;
-    insert_stats(tx, id, &stats)?;
-    let record = read_book(tx, id)?.metadata;
-    write_file(folder, id, &record, &stats)
-}
-
-/// Splices the record and the stats into the file of book `id`.
-fn write_file(folder: &Path, id: i64, record: &Metadata, stats: &Stats) -> Result<()> {
-    let path = folder.join(book_file_name(id));
-    let file_opf = opf::read(&path)?;
-    let new_opf = splice::splice(&file_opf, record, stats);
-    epub::rewrite(&path, &file_opf.path, &new_opf)
 }
 
 /// The name of a book's file in the library folder.
@@ -507,6 +537,8 @@ mod tests {
 
     #[test]
     fn the_migrations_apply_to_an_empty_database() {
-        migrations(PathBuf::new()).validate().unwrap();
+        migrations(PathBuf::new(), Arc::new(|_| {}))
+            .validate()
+            .unwrap();
     }
 }

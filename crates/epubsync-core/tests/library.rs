@@ -1,6 +1,7 @@
 mod common;
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use epubsync_core::config::Config;
 use epubsync_core::library::{ImportOutcome, Library, Stats};
@@ -263,11 +264,27 @@ fn open_measures_the_books_of_a_version_2_library() {
     let ImportOutcome::Imported { id: se_id, .. } = lib.import(&se, false).unwrap() else {
         panic!();
     };
+    let candide = common::write_epub(&s.root, "candide.epub", common::BARE_OPF);
+    let ImportOutcome::Imported { id: broken_id, .. } = lib.import(&candide, false).unwrap() else {
+        panic!();
+    };
     // Turn the library back into the shape version 2 made: the measured
-    // book has no row and no numbers in its file.
+    // books have no row and no numbers in their files. The third book's
+    // OPF gets a prefix no element declares, which the parser rejects.
     lib.db
-        .execute("DELETE FROM book_stats WHERE book_id = ?1", [id])
+        .execute(
+            "DELETE FROM book_stats WHERE book_id IN (?1, ?2)",
+            [id, broken_id],
+        )
         .unwrap();
+    let broken_path = lib.book_path(broken_id);
+    let broken_opf = common::read_entry(&broken_path, common::OPF_PATH)
+        .lines()
+        .filter(|line| !line.contains("schema:"))
+        .map(|line| format!("{line}\n"))
+        .collect::<String>()
+        .replace("<dc:creator", "<dc:creator ns1:role=\"aut\"");
+    epub::rewrite(&broken_path, common::OPF_PATH, &broken_opf).unwrap();
     lib.db.execute_batch("PRAGMA user_version = 2;").unwrap();
     let path = lib.book_path(id);
     let stripped: String = common::read_entry(&path, common::OPF_PATH)
@@ -278,13 +295,30 @@ fn open_measures_the_books_of_a_version_2_library() {
     epub::rewrite(&path, common::OPF_PATH, &stripped).unwrap();
     drop(lib);
 
-    let lib = Library::open(&s.config).unwrap();
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&lines);
+    let lib = Library::open_reporting(&s.config, move |line| {
+        sink.lock().unwrap().push(line.to_string());
+    })
+    .unwrap();
     let version: i64 = lib
         .db
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, 3);
+    let lines = lines.lock().unwrap();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert_eq!(
+        lines[0],
+        "measuring the word count and reading ease of 2 books"
+    );
+    assert_eq!(lines[1], "1/2 The Left Hand of Darkness");
+    assert!(
+        lines[2].starts_with(&format!("skipped book {broken_id}: ")),
+        "{lines:?}"
+    );
     assert_eq!(lib.get(id).unwrap().stats, SHORT_STATS);
+    assert_eq!(lib.get(broken_id).unwrap().stats, Stats::default());
     assert_eq!(Stats::from_opf(&opf::read(&path).unwrap()), SHORT_STATS);
     let text = common::read_entry(&path, common::OPF_PATH);
     assert!(

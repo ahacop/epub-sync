@@ -6,6 +6,7 @@
 //! spine order. `readsight` counts the words and scores the text with the
 //! Flesch coefficients of the book's language.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
@@ -46,23 +47,53 @@ impl Stats {
     }
 }
 
+/// The `readsight` engine for one language: the word rule and, when the
+/// crate scores the language, the Flesch coefficients.
+struct Engine {
+    readsight: ReadSight,
+    /// False for a language the crate has no patterns for. Such a book is
+    /// counted with the English word rule and gets no reading ease.
+    scores: bool,
+}
+
+/// The engines built so far, one per language code. Building an engine
+/// parses the TeX hyphenation patterns of its language, so a caller that
+/// measures many books keeps one cache across them.
+#[derive(Default)]
+pub struct Engines {
+    by_code: HashMap<String, Engine>,
+}
+
+impl Engines {
+    fn get(&mut self, code: &str) -> Result<&Engine> {
+        if !self.by_code.contains_key(code) {
+            let engine = match ReadSight::new(code) {
+                Ok(readsight) => Engine {
+                    readsight,
+                    scores: true,
+                },
+                Err(readsight::Error::UnsupportedLanguage(_)) => Engine {
+                    readsight: ReadSight::new("en-us")?,
+                    scores: false,
+                },
+                Err(e) => return Err(e.into()),
+            };
+            self.by_code.insert(code.to_string(), engine);
+        }
+        Ok(&self.by_code[code])
+    }
+}
+
 /// Measures the EPUB at `epub`, whose parsed OPF is `opf`. Every book gets
 /// a word count. A book gets a reading ease when `readsight` has Flesch
 /// coefficients for its `dc:language`. A book with no `dc:language` is
 /// measured as English.
-pub fn measure(epub: &Path, opf: &Opf) -> Result<Stats> {
+pub fn measure(epub: &Path, opf: &Opf, engines: &mut Engines) -> Result<Stats> {
     let text = body_text_of(epub, opf)?;
-    let code = readsight_code(opf.language.as_deref());
-    let (engine, scored) = match ReadSight::new(&code) {
-        Ok(engine) => (engine, true),
-        // A language the crate has no patterns for still gets a word
-        // count, made with the English word rule.
-        Err(readsight::Error::UnsupportedLanguage(_)) => (ReadSight::new("en-us")?, false),
-        Err(e) => return Err(e.into()),
-    };
-    let word_count = Some(engine.word_count(&text).max(0) as u64);
-    let reading_ease = if scored {
-        match engine.flesch_reading_ease(&text) {
+    let engine = engines.get(&readsight_code(opf.language.as_deref()))?;
+    let word_count = Some(engine.readsight.word_count(&text).max(0) as u64);
+    let reading_ease = if engine.scores {
+        match engine.readsight.flesch_reading_ease(&text) {
             Ok(result) => Some(result.score),
             Err(readsight::Error::UnsupportedFormula { .. } | readsight::Error::EmptyText) => None,
             Err(e) => return Err(e.into()),
