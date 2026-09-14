@@ -35,7 +35,7 @@ pub fn splice(opf: &Opf, record: &Metadata, stats: &Stats) -> String {
     let mut edits: Vec<Edit> = Vec::new();
     let mut inserts: Vec<String> = Vec::new();
     let mut needs_opf_prefix = false;
-    let opf_prefix = opf.opf_prefix.clone().unwrap_or_else(|| "opf".to_string());
+    let opf_prefix = opf.opf_prefix.as_deref().unwrap_or("opf");
     let mut next_id = IdMaker::new(text);
 
     // Title.
@@ -66,7 +66,7 @@ pub fn splice(opf: &Opf, record: &Metadata, stats: &Stats) -> String {
                     (false, false) => default_form,
                 };
                 let (id, attrs) =
-                    creator_attributes(creator, form, &opf_prefix, &author.sort, &mut next_id);
+                    creator_attributes(creator, form, opf_prefix, &author.sort, &mut next_id);
                 if matches!(form, FileAsForm::Attribute | FileAsForm::Both)
                     && opf.opf_prefix.is_none()
                 {
