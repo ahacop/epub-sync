@@ -1,10 +1,37 @@
 # Changelog
 
-## Unreleased
+## 0.1.7 (2026-09-14)
+
+A library made by 0.1.6 does not open with this release. The schema is now
+one migration, and a database from 0.1.6 has the tables but no version
+stamp, so the migration fails on the first table. Run `epubsync init` on a
+new folder and import the books again.
+
+The viewer shows each book's word count and Flesch reading ease. The table
+has a Words column and an Ease column between Series and Progress, both
+sortable, and the sidebar shows a Length line and an Ease line with the
+Flesch band name. Import reads both numbers from a file that carries them,
+as Standard Ebooks files do, and measures them from the text of a file that
+does not. The measured numbers are written into the library file as the
+same `schema:wordCount` and `schema:educationalLevel` elements. A book in a
+language the scorer has no coefficients for gets a word count and no
+reading ease.
 
 The command and the viewer now open a book whose OPF puts a prefix such as
 `ns0:` on a creator's attributes without declaring it. A write of such a
-file declares the prefix, so the file becomes well-formed XML.
+file declares the prefix, so the file becomes well-formed XML. A chapter
+file whose name holds a space or another percent-escaped character is found
+in the zip, so the spine walk and the cover lookup no longer stop at it. A
+chapter that starts with an XML declaration parses.
+
+A build from the working tree prints the git description as its version,
+such as `0.1.6-16-g7a09b62-dirty`, so a dev build is told apart from the
+release.
+
+`just cli <args>` runs the command from the working tree, and a bare `just`
+lists the recipes.
+
+Full changelog: https://github.com/ahacop/epub-sync/compare/v0.1.6...v0.1.7
 
 ## 0.1.6 (2026-09-14)
 
