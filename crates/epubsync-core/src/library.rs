@@ -2,7 +2,7 @@
 //! Every command opens the library once and holds the lock until it ends.
 
 use std::collections::BTreeMap;
-use std::fs::File;
+use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -28,7 +28,7 @@ pub struct Library {
     pub db: Connection,
     /// The exclusive lock on the lock file. It is released when the
     /// Library drops, at the end of the command.
-    _lock: fd_lock::RwLockWriteGuard<'static, File>,
+    _lock: File,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,18 +76,15 @@ impl Library {
             .write(true)
             .open(&lock_path)
             .with_context(|| format!("open {}", lock_path.display()))?;
-        // The guard borrows the lock for as long as it lives, so the lock
-        // is leaked to give the guard a static lifetime. One command opens
-        // one library, so the leak is one small struct per process.
-        let lock: &'static mut fd_lock::RwLock<File> =
-            Box::leak(Box::new(fd_lock::RwLock::new(lock_file)));
-        let guard = match lock.try_write() {
-            Ok(guard) => guard,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+        match lock_file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
                 bail!("another EpubSync is running on {}", folder.display())
             }
-            Err(e) => return Err(e).with_context(|| format!("lock {}", lock_path.display())),
-        };
+            Err(TryLockError::Error(e)) => {
+                return Err(e).with_context(|| format!("lock {}", lock_path.display()));
+            }
+        }
         let db_path = folder.join(DB_NAME);
         let mut db =
             Connection::open(&db_path).with_context(|| format!("open {}", db_path.display()))?;
@@ -100,7 +97,7 @@ impl Library {
         Ok(Library {
             folder,
             db,
-            _lock: guard,
+            _lock: lock_file,
         })
     }
 
