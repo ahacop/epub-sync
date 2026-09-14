@@ -93,6 +93,13 @@ fn body<'a>(
         };
         meta = meta.push(field("Series", text(value).size(12.5)));
     }
+    if let Some(words) = book.stats.word_count {
+        let value = format!("{} words", format::thousands(words));
+        meta = meta.push(field("Length", text(value).size(12.5)));
+    }
+    if let Some(score) = book.stats.reading_ease {
+        meta = meta.push(field("Ease", text(format::reading_ease(score)).size(12.5)));
+    }
     meta = meta.push(field(
         "File",
         text(book_file_name(book.id)).font(MONO).size(11.5),

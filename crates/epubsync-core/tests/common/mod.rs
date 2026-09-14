@@ -232,6 +232,40 @@ pub const BARE_OPF: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
 </package>
 "##;
 
+/// An EPUB 3 OPF in the shape Standard Ebooks writes: tab indentation,
+/// refinements on the publisher, and the word count and reading ease.
+pub const STANDARD_EBOOKS_OPF: &str = r##"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" dir="ltr" prefix="rdf: http://www.w3.org/1999/02/22-rdf-syntax-ns#" unique-identifier="uid" version="3.0" xml:lang="en-US">
+	<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+		<dc:identifier id="uid">https://standardebooks.org/ebooks/jane-austen/pride-and-prejudice</dc:identifier>
+		<dc:date>2014-05-25T00:00:00Z</dc:date>
+		<meta property="dcterms:modified">2014-05-25T00:00:00Z</meta>
+		<meta property="rdf:type">http://schema.org/Book</meta>
+		<dc:publisher id="publisher">Standard Ebooks</dc:publisher>
+		<meta property="file-as" refines="#publisher">Standard Ebooks</meta>
+		<meta property="role" refines="#publisher" scheme="marc:relators">bkd</meta>
+		<dc:description>
+			&lt;p&gt;A novel of manners.&lt;/p&gt;
+		</dc:description>
+		<dc:language>en-GB</dc:language>
+		<meta property="schema:wordCount">121970</meta>
+		<meta property="schema:educationalLevel">60.95</meta>
+		<dc:title id="title">Pride and Prejudice</dc:title>
+		<meta property="file-as" refines="#title">Pride and Prejudice</meta>
+		<dc:creator id="author">Jane Austen</dc:creator>
+		<meta property="file-as" refines="#author">Austen, Jane</meta>
+		<meta property="role" refines="#author" scheme="marc:relators">aut</meta>
+	</metadata>
+	<manifest>
+		<item href="cover.jpg" id="cover" media-type="image/jpeg" properties="cover-image"/>
+		<item href="chapter1.xhtml" id="ch1" media-type="application/xhtml+xml"/>
+	</manifest>
+	<spine>
+		<itemref idref="ch1"/>
+	</spine>
+</package>
+"##;
+
 pub const ALL_OPFS: &[(&str, &str)] = &[
     ("epub2", EPUB2_OPF),
     ("epub3", EPUB3_OPF),
@@ -239,6 +273,7 @@ pub const ALL_OPFS: &[(&str, &str)] = &[
     ("default-ns-description", DEFAULT_NS_DESCRIPTION_OPF),
     ("two-titles", TWO_TITLES_OPF),
     ("bare", BARE_OPF),
+    ("standard-ebooks", STANDARD_EBOOKS_OPF),
 ];
 
 /// Flips a byte inside the compressed data of the named entry, so reading

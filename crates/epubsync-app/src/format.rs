@@ -35,6 +35,34 @@ pub fn series_tag(series: &Series) -> String {
     }
 }
 
+/// A count with a comma every three digits: 121970 becomes "121,970".
+pub fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A Flesch reading ease score as its rounded number and the word Flesch
+/// gave that band: "61, standard".
+pub fn reading_ease(score: f64) -> String {
+    let band = match score {
+        s if s >= 90.0 => "very easy",
+        s if s >= 80.0 => "easy",
+        s if s >= 70.0 => "fairly easy",
+        s if s >= 60.0 => "standard",
+        s if s >= 50.0 => "fairly difficult",
+        s if s >= 30.0 => "difficult",
+        _ => "very difficult",
+    };
+    format!("{score:.0}, {band}")
+}
+
 /// The authors' display names joined with " & ".
 pub fn authors(authors: &[Author]) -> String {
     let names: Vec<&str> = authors.iter().map(|a| a.name.as_str()).collect();
@@ -104,6 +132,23 @@ mod tests {
             number: None,
         };
         assert_eq!(series_tag(&bare), "Martian");
+    }
+
+    #[test]
+    fn thousands_groups_digits() {
+        assert_eq!(thousands(0), "0");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1000), "1,000");
+        assert_eq!(thousands(121970), "121,970");
+        assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn reading_ease_rounds_and_names_the_band() {
+        assert_eq!(reading_ease(60.95), "61, standard");
+        assert_eq!(reading_ease(92.0), "92, very easy");
+        assert_eq!(reading_ease(59.6), "60, fairly difficult");
+        assert_eq!(reading_ease(12.3), "12, very difficult");
     }
 
     #[test]

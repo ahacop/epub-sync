@@ -94,6 +94,13 @@ pub struct Opf {
     pub description: Option<Element>,
     pub language: Option<String>,
     pub series: Option<Series>,
+    /// The `meta property="schema:wordCount"` value. Standard Ebooks writes
+    /// it. The app reads it and never writes it.
+    pub word_count: Option<u64>,
+    /// The `meta property="schema:educationalLevel"` value, which Standard
+    /// Ebooks uses for the Flesch reading ease score despite the name: 0 to
+    /// 100, higher is easier. The app reads it and never writes it.
+    pub reading_ease: Option<f64>,
     /// Path of the cover image inside the zip.
     pub cover_path: Option<String>,
     /// Byte offset after the last element the app owns. Inserts go here.
@@ -215,6 +222,8 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
         .next()
         .map(|n| node_text(&n));
     let series = read_series(&metadata, &text);
+    let word_count = meta_property(&metadata, "schema:wordCount");
+    let reading_ease = meta_property(&metadata, "schema:educationalLevel");
     let cover_path = cover_path(&package, &metadata, path);
 
     let opf_prefix = [package, metadata]
@@ -245,6 +254,8 @@ pub fn parse(path: &str, text: String) -> Result<Opf> {
         description,
         language,
         series,
+        word_count,
+        reading_ease,
         cover_path,
         insert_at: metadata_close,
         indent: String::new(),
@@ -402,6 +413,14 @@ fn read_series(metadata: &Node, text: &str) -> Option<Series> {
             group_position,
         },
     })
+}
+
+/// The parsed text of the first `meta property="..."` that refines nothing,
+/// when there is one and its text parses as `T`.
+fn meta_property<T: std::str::FromStr>(metadata: &Node, property: &str) -> Option<T> {
+    metas(metadata)
+        .find(|m| m.attribute("property") == Some(property) && m.attribute("refines").is_none())
+        .and_then(|m| node_text(&m).parse().ok())
 }
 
 fn meta_content(node: &Node, text: &str) -> Element {

@@ -15,6 +15,9 @@ use crate::sort_name::sort_name;
 use crate::{epub, kepub, opf, splice};
 
 const SCHEMA: &str = include_str!("schema.sql");
+/// The `user_version` that `schema.sql` sets. A database below it gets
+/// the missing tables added when it is opened.
+const SCHEMA_VERSION: i64 = 1;
 const DB_NAME: &str = "library.sqlite";
 const LOCK_NAME: &str = "lock";
 const IMPORT_TEMP: &str = "import.tmp";
@@ -32,6 +35,29 @@ pub struct Book {
     pub id: i64,
     pub revision: i64,
     pub metadata: Metadata,
+    pub stats: Stats,
+}
+
+/// Numbers about the book's text, read from the file's OPF at import.
+/// The app never edits them or writes them back.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Stats {
+    pub word_count: Option<u64>,
+    /// The Flesch reading ease score: 0 to 100, higher is easier.
+    pub reading_ease: Option<f64>,
+}
+
+impl Stats {
+    pub fn from_opf(opf: &opf::Opf) -> Stats {
+        Stats {
+            word_count: opf.word_count,
+            reading_ease: opf.reading_ease,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.word_count.is_none() && self.reading_ease.is_none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,11 +117,53 @@ impl Library {
         let db =
             Connection::open(&db_path).with_context(|| format!("open {}", db_path.display()))?;
         db.execute_batch("PRAGMA foreign_keys = ON;")?;
-        Ok(Library {
+        let mut lib = Library {
             folder,
             db,
             _lock: guard,
-        })
+        };
+        lib.migrate()?;
+        Ok(lib)
+    }
+
+    /// Brings a database made by an older schema up to `SCHEMA_VERSION`.
+    fn migrate(&mut self) -> Result<()> {
+        let version: i64 = self.db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version >= SCHEMA_VERSION {
+            return Ok(());
+        }
+        if version < 1 {
+            self.add_book_stats().context("add the book_stats table")?;
+        }
+        Ok(())
+    }
+
+    /// Schema version 1: the `book_stats` table, filled from the OPF of
+    /// every book file. A file that cannot be read gets no row, the same
+    /// as a file with no numbers in it.
+    fn add_book_stats(&mut self) -> Result<()> {
+        let folder = self.folder.clone();
+        let tx = self.db.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE book_stats (
+                book_id INTEGER PRIMARY KEY REFERENCES books(id),
+                word_count INTEGER,
+                reading_ease REAL
+            );",
+        )?;
+        let ids: Vec<i64> = tx
+            .prepare("SELECT id FROM books")?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        for id in ids {
+            let Ok(file_opf) = opf::read(&folder.join(book_file_name(id))) else {
+                continue;
+            };
+            insert_stats(&tx, id, &Stats::from_opf(&file_opf))?;
+        }
+        tx.pragma_update(None, "user_version", 1)?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// The path of a book's file in the library folder.
@@ -108,6 +176,7 @@ impl Library {
         // 1 and 2: read the file metadata and make missing sort names.
         let source_opf = opf::read(source).with_context(|| format!("read {}", source.display()))?;
         let record = Metadata::from_opf(&source_opf, sort_name);
+        let stats = Stats::from_opf(&source_opf);
         let made_sort: Vec<Author> = source_opf
             .creators
             .iter()
@@ -140,7 +209,7 @@ impl Library {
         }
 
         // 5: insert the row and rename the file to its id.
-        let id = self.insert(&record)?;
+        let id = self.insert(&record, &stats)?;
         std::fs::rename(&temp, self.book_path(id)).context("rename the imported file")?;
 
         // 6: write made sort names into the converted file.
@@ -165,7 +234,7 @@ impl Library {
             .context("look for the same book")
     }
 
-    fn insert(&mut self, record: &Metadata) -> Result<i64> {
+    fn insert(&mut self, record: &Metadata, stats: &Stats) -> Result<i64> {
         let tx = self.db.transaction()?;
         tx.execute(
             "INSERT INTO books (title, series, series_number, publisher, description) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -179,6 +248,7 @@ impl Library {
         )?;
         let id = tx.last_insert_rowid();
         insert_authors(&tx, id, &record.authors)?;
+        insert_stats(&tx, id, stats)?;
         tx.commit()?;
         Ok(id)
     }
@@ -250,8 +320,8 @@ impl Library {
         self.write_file(id, record)
     }
 
-    /// Deletes the file, then the book row, its authors, its `sent` rows,
-    /// and its `progress` rows. Word rows stay.
+    /// Deletes the file, then the book row, its authors, its stats, its
+    /// `sent` rows, and its `progress` rows. Word rows stay.
     pub fn remove(&mut self, id: i64) -> Result<()> {
         self.get(id)?;
         let path = self.book_path(id);
@@ -264,6 +334,7 @@ impl Library {
         tx.execute("DELETE FROM progress WHERE book_id = ?1", [id])?;
         tx.execute("DELETE FROM sent WHERE book_id = ?1", [id])?;
         tx.execute("DELETE FROM book_authors WHERE book_id = ?1", [id])?;
+        tx.execute("DELETE FROM book_stats WHERE book_id = ?1", [id])?;
         tx.execute("DELETE FROM books WHERE id = ?1", [id])?;
         tx.commit()?;
         Ok(())
@@ -276,10 +347,11 @@ pub fn book_file_name(id: i64) -> String {
 }
 
 const BOOK_SELECT: &str =
-    "SELECT id, revision, title, series, series_number, publisher, description FROM books";
+    "SELECT id, revision, title, series, series_number, publisher, description,
+     word_count, reading_ease FROM books LEFT JOIN book_stats ON book_id = id";
 
-/// A `books` row as a Book with no authors. The caller fills them in
-/// from `book_authors`.
+/// A `books` row joined to its `book_stats` row as a Book with no authors.
+/// The caller fills them in from `book_authors`.
 fn book_from_row(row: &rusqlite::Row) -> rusqlite::Result<Book> {
     let series_name: Option<String> = row.get(3)?;
     let series_number: Option<f64> = row.get(4)?;
@@ -296,7 +368,23 @@ fn book_from_row(row: &rusqlite::Row) -> rusqlite::Result<Book> {
             publisher: row.get(5)?,
             description: row.get(6)?,
         },
+        stats: Stats {
+            word_count: row.get::<_, Option<i64>>(7)?.map(|n| n as u64),
+            reading_ease: row.get(8)?,
+        },
     })
+}
+
+/// Inserts the stats row when there is a number to hold.
+fn insert_stats(tx: &rusqlite::Transaction, id: i64, stats: &Stats) -> Result<()> {
+    if stats.is_empty() {
+        return Ok(());
+    }
+    tx.execute(
+        "INSERT INTO book_stats (book_id, word_count, reading_ease) VALUES (?1, ?2, ?3)",
+        params![id, stats.word_count.map(|n| n as i64), stats.reading_ease],
+    )?;
+    Ok(())
 }
 
 fn insert_authors(tx: &rusqlite::Transaction, id: i64, authors: &[Author]) -> Result<()> {

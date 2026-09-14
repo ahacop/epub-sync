@@ -200,9 +200,29 @@ fn reads_a_file_with_no_series_and_no_file_as() {
     assert!(opf.series.is_none());
     assert!(opf.publisher.is_none());
     assert!(opf.description.is_none());
+    assert!(opf.word_count.is_none());
+    assert!(opf.reading_ease.is_none());
     assert_eq!(opf.language.as_deref(), Some("fr"));
     assert_eq!(opf.insert_at, creator.range.end);
     assert_eq!(opf.indent, "\n    ");
+}
+
+#[test]
+fn reads_the_word_count_and_reading_ease_from_standard_ebooks() {
+    let opf = parse(common::STANDARD_EBOOKS_OPF);
+    assert_eq!(opf.title.as_ref().unwrap().value, "Pride and Prejudice");
+    assert_eq!(opf.creators[0].sort(), Some("Austen, Jane"));
+    assert_eq!(opf.word_count, Some(121970));
+    assert_eq!(opf.reading_ease, Some(60.95));
+    assert_eq!(opf.indent, "\n\t\t");
+}
+
+#[test]
+fn a_word_count_that_is_not_a_number_reads_as_none() {
+    let text = common::STANDARD_EBOOKS_OPF.replace(">121970<", ">many<");
+    let opf = parse(&text);
+    assert!(opf.word_count.is_none());
+    assert_eq!(opf.reading_ease, Some(60.95));
 }
 
 #[test]

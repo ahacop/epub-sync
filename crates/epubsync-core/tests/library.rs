@@ -3,7 +3,7 @@ mod common;
 use std::path::Path;
 
 use epubsync_core::config::Config;
-use epubsync_core::library::{ImportOutcome, Library};
+use epubsync_core::library::{ImportOutcome, Library, Stats};
 use epubsync_core::metadata::{Author, Series};
 use epubsync_core::opf;
 
@@ -146,6 +146,61 @@ fn import_reads_every_field_and_leaves_a_file_with_sort_names_alone() {
 }
 
 #[test]
+fn import_stores_the_word_count_and_reading_ease() {
+    let _s = serial();
+    let s = setup();
+    let mut lib = Library::open(&s.config).unwrap();
+    let source = common::write_epub(&s.root, "pp.epub", common::STANDARD_EBOOKS_OPF);
+    let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    assert_eq!(
+        lib.get(id).unwrap().stats,
+        Stats {
+            word_count: Some(121970),
+            reading_ease: Some(60.95),
+        }
+    );
+
+    // A file with no numbers gets no stats row.
+    let bare = common::write_epub(&s.root, "candide.epub", common::BARE_OPF);
+    let ImportOutcome::Imported { id: bare_id, .. } = lib.import(&bare, false).unwrap() else {
+        panic!();
+    };
+    assert_eq!(lib.get(bare_id).unwrap().stats, Stats::default());
+    let rows: i64 = lib
+        .db
+        .query_row("SELECT count(*) FROM book_stats", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 1);
+    assert_eq!(lib.list().unwrap().len(), 2);
+}
+
+#[test]
+fn open_adds_the_stats_table_to_a_version_0_database_and_fills_it() {
+    let _s = serial();
+    let s = setup();
+    let mut lib = Library::open(&s.config).unwrap();
+    let source = common::write_epub(&s.root, "pp.epub", common::STANDARD_EBOOKS_OPF);
+    let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    // Turn the database back into the shape before the stats table.
+    lib.db
+        .execute_batch("DROP TABLE book_stats; PRAGMA user_version = 0;")
+        .unwrap();
+    drop(lib);
+
+    let lib = Library::open(&s.config).unwrap();
+    let version: i64 = lib
+        .db
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 1);
+    assert_eq!(lib.get(id).unwrap().stats.word_count, Some(121970));
+}
+
+#[test]
 fn stops_on_the_same_title_and_author_unless_forced() {
     let _s = serial();
     let s = setup();
@@ -281,6 +336,7 @@ fn remove_deletes_the_file_and_the_rows_but_keeps_words() {
             .unwrap()
     };
     assert_eq!(count("book_authors"), 0);
+    assert_eq!(count("book_stats"), 0);
     assert_eq!(count("sent"), 0);
     assert_eq!(count("progress"), 0);
     assert_eq!(count("words"), 1);

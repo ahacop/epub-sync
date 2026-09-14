@@ -19,6 +19,14 @@ CREATE TABLE book_authors (
     PRIMARY KEY (book_id, position)
 );
 
+-- Numbers about a book's text, read from the file's OPF. The app never
+-- edits them or writes them back. A book with no known number has no row.
+CREATE TABLE book_stats (
+    book_id INTEGER PRIMARY KEY REFERENCES books(id),
+    word_count INTEGER,
+    reading_ease REAL
+);
+
 CREATE TABLE devices (
     serial TEXT PRIMARY KEY
 );
@@ -55,3 +63,6 @@ CREATE TABLE words (
     looked_up_at TEXT NOT NULL,
     UNIQUE (word, volume_id, looked_up_at)
 );
+
+-- The schema version. `Library::open` brings an older database up to it.
+PRAGMA user_version = 1;

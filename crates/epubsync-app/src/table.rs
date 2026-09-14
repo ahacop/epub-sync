@@ -384,7 +384,7 @@ pub fn chip<'a>(status: ReadStatus) -> Element<'a, Message> {
 mod tests {
     use std::path::PathBuf;
 
-    use epubsync_core::library::{Book, ProgressRow};
+    use epubsync_core::library::{Book, ProgressRow, Stats};
     use epubsync_core::metadata::{Author, Metadata, Series};
 
     use super::*;
@@ -406,6 +406,7 @@ mod tests {
                 series,
                 ..Metadata::default()
             },
+            stats: Stats::default(),
         }
     }
 
