@@ -21,7 +21,7 @@
           # One workspace crate as a package. `extra` is merged into the
           # buildRustPackage attributes.
           crate = name: extra: pkgs.rustPlatform.buildRustPackage ({
-            version = "0.1.4";
+            version = "0.1.5";
             src = fs.toSource {
               root = ./.;
               fileset = fs.unions [ ./Cargo.toml ./Cargo.lock ./crates ./kepub-shim ];
