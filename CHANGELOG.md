@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.8 (2026-09-17)
+
+A sync from macOS no longer leaves a `._` file next to each book it sends.
+The copy to the Kobo now writes only the book's bytes, so macOS has no
+extended attributes to store on the FAT volume. Sync also deletes the `._`
+files that earlier syncs left in the `EpubSync` folder.
+
 ## 0.1.7 (2026-09-14)
 
 A library made by 0.1.6 does not open with this release. The schema is now
