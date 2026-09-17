@@ -127,11 +127,47 @@ impl Kobo {
         format!("file:///mnt/onboard/{FOLDER}/{id}.kepub.epub")
     }
 
+    /// Deletes the `._` files in the book folder and returns how many it
+    /// deleted. macOS writes a `._` file to hold a copied file's extended
+    /// attributes on a FAT volume.
+    pub fn remove_dot_underscore_files(&self) -> Result<usize> {
+        let entries = match std::fs::read_dir(self.folder()) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e).with_context(|| format!("read {}", self.folder().display())),
+        };
+        let mut removed = 0;
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().starts_with("._") && entry.file_type()?.is_file()
+            {
+                std::fs::remove_file(entry.path())
+                    .with_context(|| format!("delete {}", entry.path().display()))?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     /// Unmounts the volume and tells the Kobo the session is over. Call
     /// after `finish`, so the database is closed first.
     pub fn eject(&self) -> Result<eject::Ejected> {
         eject::eject(&self.root)
     }
+}
+
+/// Copies the file's bytes to `target` and flushes them to the volume.
+/// Returns the size.
+///
+/// `std::fs::copy` is not used because on macOS it also copies extended
+/// attributes. FAT cannot store them, so macOS writes them to a
+/// `._<name>` file next to the book.
+fn copy_bytes(source: &Path, target: &Path) -> Result<u64> {
+    let mut from = std::fs::File::open(source)?;
+    let mut to = std::fs::File::create(target)?;
+    let size = std::io::copy(&mut from, &mut to)?;
+    to.sync_all()?;
+    Ok(size)
 }
 
 /// Parses the book id out of a device file name such as `12.kepub.epub`.
@@ -170,9 +206,8 @@ impl Device for Kobo {
         match action {
             Action::Send { .. } | Action::Replace { .. } | Action::SendAgain { .. } => {
                 std::fs::create_dir_all(self.folder())?;
-                let size = std::fs::copy(source, &target)
+                let size = copy_bytes(source, &target)
                     .with_context(|| format!("copy to {}", target.display()))?;
-                std::fs::File::open(&target)?.sync_all()?;
                 if matches!(action, Action::Replace { .. })
                     && let Db::Writable(db) = &self.db
                 {

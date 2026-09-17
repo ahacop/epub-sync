@@ -55,6 +55,25 @@ fn list_parses_ids_from_file_names() {
 }
 
 #[test]
+fn remove_dot_underscore_files_keeps_the_books() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fake_kobo(dir.path(), "KOBOeReader", "N1");
+    let kobo = Kobo::at(&root).unwrap();
+    assert_eq!(kobo.remove_dot_underscore_files().unwrap(), 0);
+    std::fs::create_dir_all(kobo.folder()).unwrap();
+    for name in ["3.kepub.epub", "._3.kepub.epub", "._12.kepub.epub"] {
+        std::fs::write(kobo.folder().join(name), b"").unwrap();
+    }
+    assert_eq!(kobo.remove_dot_underscore_files().unwrap(), 2);
+    let mut left: Vec<String> = std::fs::read_dir(kobo.folder())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, vec!["3.kepub.epub"]);
+}
+
+#[test]
 fn sync_copies_replaces_deletes_and_updates_sent() {
     let dir = tempfile::tempdir().unwrap();
     let mut lib = Library::init(&dir.path().join("library")).unwrap();

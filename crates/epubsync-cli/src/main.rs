@@ -509,6 +509,10 @@ fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
         };
         println!("{verb} {}", a.id());
     })?;
+    let removed = kobo.remove_dot_underscore_files()?;
+    if removed > 0 {
+        println!("deleted {removed} macOS ._ file(s)");
+    }
 
     if let Gate::Open(actions) = &gate {
         let sent_now: Vec<i64> = actions
