@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "epubsync-app"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "epubsync-core",
@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "epubsync-cli"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "epubsync-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "directories",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "epubsync-epub"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "roxmltree 0.21.1",
