@@ -10,12 +10,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04-arm, ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v16
-      - uses: DeterminateSystems/magic-nix-cache-action@v9
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
+      # Pushes the Linux store paths the job builds to the ahacop cache,
+      # so a NixOS machine that installs epubsync downloads it instead of
+      # compiling it. Without the secret, as on a fork's pull request,
+      # the step only reads from the cache.
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        if: runner.os == 'Linux'
+        with:
+          name: ahacop
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Test
         run: nix develop -c cargo test --locked
       - name: Build the package
