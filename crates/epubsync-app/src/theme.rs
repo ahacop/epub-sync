@@ -229,6 +229,13 @@ pub fn header(sorted: bool) -> impl Fn(&Theme, button::Status) -> button::Style 
     }
 }
 
+/// A toolbar tab: no ground of its own. The name reads in `ink` while
+/// its pane is in view and under the pointer, and in `muted` elsewhere,
+/// the same as a column header.
+pub fn tab(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    header(active)
+}
+
 /// A table row. The selected row sits on `accent_tint`; a row under the
 /// pointer sits on `surface_2`; the rest sit on `surface`.
 pub fn row(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {

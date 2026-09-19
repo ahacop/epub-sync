@@ -415,6 +415,14 @@ pub struct WordRow {
     pub looked_up_at: String,
 }
 
+impl WordRow {
+    /// The day part of `looked_up_at`: the first ten characters of the
+    /// timestamp, as "2026-09-08".
+    pub fn day(&self) -> &str {
+        self.looked_up_at.get(..10).unwrap_or(&self.looked_up_at)
+    }
+}
+
 impl Library {
     /// Every progress row, grouped by book id and in device order within
     /// a book.

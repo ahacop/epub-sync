@@ -1,9 +1,7 @@
-//! The sidebar: the selected book's details, its description, and its
-//! progress on each device.
+//! The sidebar: the selected book's details, its description, its
+//! progress on each device, and the words looked up in it.
 
-use std::collections::BTreeMap;
-
-use epubsync_core::library::{Book, Field, ProgressRow, book_file_name};
+use epubsync_core::library::{Book, Field, ProgressRow, WordRow, book_file_name};
 use epubsync_core::metadata::format_series_number;
 use iced::widget::{
     button, column, container, markdown, progress_bar, row, scrollable, space, text,
@@ -28,7 +26,7 @@ pub fn view<'a>(open: &'a Open, book: &'a Book, selected: &'a Selected) -> Eleme
     let pane = column![
         header(book.id),
         theme::hline(),
-        scrollable(body(book, selected, &open.progress)).height(Fill),
+        scrollable(body(open, book, selected)).height(Fill),
         theme::hline(),
         footer(open, book),
     ];
@@ -60,11 +58,7 @@ fn header<'a>(id: i64) -> Element<'a, Message> {
     .into()
 }
 
-fn body<'a>(
-    book: &'a Book,
-    selected: &'a Selected,
-    progress: &'a BTreeMap<i64, Vec<ProgressRow>>,
-) -> Element<'a, Message> {
+fn body<'a>(open: &'a Open, book: &'a Book, selected: &'a Selected) -> Element<'a, Message> {
     let m = &book.metadata;
 
     let title = text(&m.title).size(26).font(SERIF_MEDIUM).line_height(1.15);
@@ -113,14 +107,12 @@ fn body<'a>(
             .map(|_uri| Message::LinkClicked)
     };
 
-    let mut devices = column![
-        text("ON DEVICE")
-            .size(11.5)
-            .font(SANS_MEDIUM)
-            .style(theme::text_color(|c| c.muted))
-    ]
-    .spacing(8);
-    let rows = progress.get(&book.id).map(Vec::as_slice).unwrap_or(&[]);
+    let mut devices = column![heading("ON DEVICE")].spacing(8);
+    let rows = open
+        .progress
+        .get(&book.id)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
     if rows.is_empty() {
         devices = devices.push(
             text("Not yet sent to a device.")
@@ -135,6 +127,22 @@ fn body<'a>(
         devices = devices.push(device(p));
     }
 
+    let looked_up: Vec<&WordRow> = open
+        .words
+        .iter()
+        .filter(|w| w.book_id == Some(book.id))
+        .collect();
+    let mut words = column![heading("WORDS")].spacing(8);
+    if looked_up.is_empty() {
+        words = words.push(
+            text("No words looked up in this book.")
+                .size(12.5)
+                .style(theme::text_color(|c| c.faint)),
+        );
+    } else {
+        words = words.push(column(looked_up.into_iter().map(word)).spacing(4));
+    }
+
     column![
         column![title, byline.wrap()].spacing(6),
         theme::hline(),
@@ -143,9 +151,34 @@ fn body<'a>(
         description,
         theme::hline(),
         devices,
+        theme::hline(),
+        words,
     ]
     .spacing(14)
     .padding(padding::top(18).bottom(24).left(INSET).right(INSET))
+    .into()
+}
+
+/// A block heading in upper case: "ON DEVICE", "WORDS".
+fn heading<'a>(label: &'a str) -> Element<'a, Message> {
+    text(label)
+        .size(11.5)
+        .font(SANS_MEDIUM)
+        .style(theme::text_color(|c| c.muted))
+        .into()
+}
+
+/// One looked-up word and the day it was looked up.
+fn word(w: &WordRow) -> Element<'_, Message> {
+    row![
+        text(&w.word).size(13.5),
+        space().width(Fill),
+        text(format::day(w.day()))
+            .size(12.5)
+            .style(theme::text_color(|c| c.muted)),
+    ]
+    .spacing(12)
+    .align_y(Center)
     .into()
 }
 

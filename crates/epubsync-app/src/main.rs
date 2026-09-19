@@ -1,22 +1,24 @@
 //! The library viewer: a window with a table of books and, when a book is
-//! selected, its details in a sidebar on the right. It is read-only. The
-//! CLI imports, edits, removes, and syncs.
+//! selected, its details in a sidebar on the right. A Words tab swaps the
+//! table for the list of words looked up on a device. It is read-only.
+//! The CLI imports, edits, removes, and syncs.
 
 mod description;
 mod detail;
 mod format;
 mod table;
 mod theme;
+mod words;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use epubsync_core::config;
 use epubsync_core::device::ReadStatus;
-use epubsync_core::library::{Book, Library, ProgressRow};
+use epubsync_core::library::{Book, Library, ProgressRow, WordRow};
 use epubsync_core::query::{self, Query, Sort, SortKey};
 use iced::keyboard::{self, key};
-use iced::widget::{column, container, markdown, row, space, text, text_input};
+use iced::widget::{button, column, container, markdown, row, space, text, text_input};
 use iced::{Center, Element, Fill, Subscription, Task, padding};
 
 use crate::theme::{BODY, MONO, SANS_SEMIBOLD};
@@ -40,14 +42,27 @@ struct Open {
     books: Vec<Book>,
     /// Reading progress by book id, one row per device.
     progress: BTreeMap<i64, Vec<ProgressRow>>,
+    /// Every looked-up word, newest first. The words pane lists them all
+    /// and the sidebar lists the selected book's.
+    words: Vec<WordRow>,
+    /// The pane in the main area.
+    pane: Pane,
     /// The sorted column and the filter field's text, as the core query
-    /// the table selects its rows with.
+    /// the table selects its rows with. The words pane matches the same
+    /// text against the word and the book title.
     query: Query,
-    /// The table body's scroll offset in pixels. The table builds only
-    /// the rows in view at that offset.
+    /// The scroll offset of the pane in view, in pixels. The pane builds
+    /// only the rows in view at that offset.
     scroll: f32,
     /// The book in the sidebar, if any.
     selected: Option<Selected>,
+}
+
+/// The pane in the main area: the table of books, or the list of words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pane {
+    Books,
+    Words,
 }
 
 /// The book in the sidebar.
@@ -64,6 +79,8 @@ enum Message {
     Select(i64),
     /// The sidebar's close button, or the Escape key.
     Close,
+    /// A click on a toolbar tab.
+    Show(Pane),
     /// A click on a column header.
     Sort(SortKey),
     /// A change to the filter field.
@@ -113,6 +130,8 @@ fn open() -> anyhow::Result<(Library, Viewer)> {
         folder: library.folder.clone(),
         books: library.list()?,
         progress: library.progress()?,
+        words: library.words(None, None)?,
+        pane: Pane::Books,
         query: Query::default(),
         scroll: 0.0,
         selected: None,
@@ -139,6 +158,15 @@ fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
             });
         }
         Message::Close => open.selected = None,
+        Message::Show(pane) => {
+            // The two panes share one scrollable id, so the new pane
+            // starts at the top rather than at the old pane's offset.
+            if open.pane != pane {
+                open.pane = pane;
+                open.scroll = 0.0;
+                return table::scroll_to_top();
+            }
+        }
         Message::Sort(key) => {
             let sort = &mut open.query.sort;
             if sort.keys == [key] {
@@ -163,13 +191,23 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
     match viewer {
         Viewer::OpenFailed(error) => container(text(error)).padding(16).into(),
         Viewer::Open(open) => {
-            let rows = open.query.select(&open.books, &open.progress);
+            let (pane, shown_count): (Element<'_, Message>, usize) = match open.pane {
+                Pane::Books => {
+                    let rows = open.query.select(&open.books, &open.progress);
+                    let n = rows.len();
+                    (table::view(open, rows), n)
+                }
+                Pane::Words => {
+                    let rows = words::select(&open.words, &open.books, &open.query.filter.text);
+                    let n = rows.len();
+                    (words::view(open, rows), n)
+                }
+            };
             let shown = open.selected.as_ref().and_then(|s| {
                 let book = open.books.iter().find(|b| b.id == s.id)?;
                 Some((book, s))
             });
-            let shown_count = rows.len();
-            let mut main = row![table::view(open, rows)].height(Fill);
+            let mut main = row![pane].height(Fill);
             if let Some((book, selected)) = shown {
                 main = main.push(detail::view(open, book, selected));
             }
@@ -178,35 +216,47 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
     }
 }
 
-/// "1 book" or "23 books".
-fn books(n: usize) -> String {
+/// "1 book", "23 books", "1 word", "12 words".
+fn count(n: usize, noun: &str) -> String {
     if n == 1 {
-        "1 book".to_string()
+        format!("1 {noun}")
     } else {
-        format!("{n} books")
+        format!("{n} {noun}s")
     }
 }
 
-/// The toolbar: the title, the count, and the filter field. The count
-/// reads "4 of 23 books" while the filter is set.
+/// The toolbar: the Library and Words tabs, the count for the pane in
+/// view, and the filter field. The count reads "4 of 23 books" while
+/// the filter is set.
 fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
-    let total = open.books.len();
-    let count = if open.query.filter.is_empty() {
-        books(total)
-    } else {
-        format!("{shown} of {}", books(total))
+    let (total, noun, placeholder) = match open.pane {
+        Pane::Books => (
+            open.books.len(),
+            "book",
+            "Filter by title, author, or series",
+        ),
+        Pane::Words => (open.words.len(), "word", "Filter by word or book"),
     };
-    let filter = text_input(
-        "Filter by title, author, or series",
-        &open.query.filter.text,
-    )
-    .on_input(Message::Filter)
-    .width(300)
-    .size(13)
-    .padding([5, 10])
-    .style(theme::filter);
+    let count = if open.query.filter.is_empty() {
+        count(total, noun)
+    } else {
+        format!("{shown} of {}", count(total, noun))
+    };
+    let tab = |label: &'static str, pane: Pane| {
+        button(text(label).size(14).font(SANS_SEMIBOLD))
+            .on_press(Message::Show(pane))
+            .padding(0)
+            .style(theme::tab(open.pane == pane))
+    };
+    let filter = text_input(placeholder, &open.query.filter.text)
+        .on_input(Message::Filter)
+        .width(300)
+        .size(13)
+        .padding([5, 10])
+        .style(theme::filter);
     let bar = row![
-        text("Library").size(14).font(SANS_SEMIBOLD),
+        tab("Library", Pane::Books),
+        tab("Words", Pane::Words),
         text(count).size(BODY).style(theme::text_color(|c| c.muted)),
         space().width(Fill),
         filter,
@@ -233,7 +283,7 @@ fn status_bar(open: &Open) -> Element<'_, Message> {
         has_status(ReadStatus::Finished)
     );
     let bar = row![
-        text(books(open.books.len()))
+        text(count(open.books.len(), "book"))
             .size(11.5)
             .style(theme::text_color(|c| c.muted)),
         text(counts)

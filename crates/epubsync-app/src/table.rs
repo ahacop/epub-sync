@@ -60,15 +60,17 @@ const MARK: f32 = 3.0;
 
 /// The height of one row, and the pitch from one row to the next: the
 /// row and the 1 px line under it. The table builds only the rows in
-/// view, and the pitch tells it which rows those are.
-const ROW: f32 = 34.0;
+/// view, and the pitch tells it which rows those are. The words pane
+/// shares both.
+pub const ROW: f32 = 34.0;
 const PITCH: f32 = ROW + 1.0;
 
 fn table_id() -> widget::Id {
     widget::Id::new("table")
 }
 
-/// Scrolls the table body to the top.
+/// Scrolls the table body, or the words pane's, to the top. The two
+/// share one widget id, since only one of them is in the window.
 pub fn scroll_to_top() -> Task<Message> {
     widget::operation::scroll_to(table_id(), scrollable::AbsoluteOffset { x: 0.0, y: 0.0 })
 }
@@ -93,25 +95,33 @@ pub fn view<'a>(open: &'a Open, rows: Vec<&'a Book>) -> Element<'a, Message> {
         .into()
 }
 
-/// The table body: a scrollable column as tall as every row, with only
-/// the rows in view built. Blank space stands in for the rows above and
-/// below them, so the scrollbar and the wheel behave as if every row were
-/// there. Building every row would shape the text of thousands of cells
-/// on each redraw.
+/// The table body: the rows the query selected, built through `rows`.
 fn body<'a>(open: &'a Open, rows: &[&'a Book], size: Size) -> Element<'a, Message> {
     let selected = open.selected.as_ref().map(|s| s.id);
+    self::rows(open.scroll, size, rows.len(), |i| {
+        book_row(rows[i], &open.progress, selected == Some(rows[i].id))
+    })
+}
+
+/// A scrollable column of `len` rows at the row pitch, with only the rows
+/// in view at `scroll` built by `build`. Blank space stands in for the
+/// rows above and below them, so the scrollbar and the wheel behave as if
+/// every row were there. Building every row would shape the text of
+/// thousands of cells on each redraw.
+pub fn rows<'a>(
+    scroll: f32,
+    size: Size,
+    len: usize,
+    build: impl Fn(usize) -> Element<'a, Message>,
+) -> Element<'a, Message> {
     // One row more than fits, since the first row in view is cut off at
     // the top.
     let in_view = (size.height / PITCH).ceil() as usize + 1;
-    let first = ((open.scroll / PITCH) as usize).min(rows.len().saturating_sub(in_view));
-    let last = (first + in_view).min(rows.len());
-    let built = column(
-        rows[first..last]
-            .iter()
-            .map(|b| book_row(b, &open.progress, selected == Some(b.id))),
-    );
+    let first = ((scroll / PITCH) as usize).min(len.saturating_sub(in_view));
+    let last = (first + in_view).min(len);
+    let built = column((first..last).map(build));
     let above = space().height(first as f32 * PITCH);
-    let below = space().height((rows.len() - last) as f32 * PITCH);
+    let below = space().height((len - last) as f32 * PITCH);
     scrollable(column![above, built, below])
         .id(table_id())
         .on_scroll(|viewport| Message::Scrolled(viewport.absolute_offset().y))
@@ -141,7 +151,7 @@ fn header<'a>(column: SortKey, sort: &Sort) -> Element<'a, Message> {
     } else {
         mark
     };
-    button(column![cell(label, column), mark])
+    button(column![column_cell(label, column), mark])
         .on_press(Message::Sort(column))
         .width(width(column))
         .height(Fill)
@@ -207,14 +217,14 @@ fn book_row<'a>(
 
     let cells = row![
         mark,
-        cell(id, SortKey::Id),
-        cell(title, SortKey::Title),
-        cell(author, SortKey::Author),
-        cell(series, SortKey::Series),
-        cell(words, SortKey::Words),
-        cell(ease, SortKey::Ease),
-        cell(progress_cell(latest), SortKey::Progress),
-        cell(last_read, SortKey::LastRead),
+        column_cell(id, SortKey::Id),
+        column_cell(title, SortKey::Title),
+        column_cell(author, SortKey::Author),
+        column_cell(series, SortKey::Series),
+        column_cell(words, SortKey::Words),
+        column_cell(ease, SortKey::Ease),
+        column_cell(progress_cell(latest), SortKey::Progress),
+        column_cell(last_read, SortKey::LastRead),
     ]
     .height(Fill)
     .align_y(Center);
@@ -232,20 +242,31 @@ fn book_row<'a>(
 
 /// Cell text at the body size on one line. The cell clips what does not
 /// fit.
-fn line<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
+pub fn line<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
     text(content).size(BODY).wrapping(text::Wrapping::None)
 }
 
-/// A cell: the column's width, the row's full height with the content
-/// centered in it, 12 px side padding, one line, clipped. The number
-/// columns are right-aligned.
-fn cell<'a>(content: impl Into<Element<'a, Message>>, column: SortKey) -> Element<'a, Message> {
-    let mut cell = container(content)
-        .width(width(column))
+/// A cell: the given width, the row's full height with the content
+/// centered in it, 12 px side padding, one line, clipped.
+pub fn cell<'a>(
+    content: impl Into<Element<'a, Message>>,
+    width: Length,
+) -> widget::Container<'a, Message> {
+    container(content)
+        .width(width)
         .height(Fill)
         .align_y(Center)
         .padding(padding::horizontal(12))
-        .clip(true);
+        .clip(true)
+}
+
+/// A cell in one of the table's columns. The number columns are
+/// right-aligned.
+fn column_cell<'a>(
+    content: impl Into<Element<'a, Message>>,
+    column: SortKey,
+) -> Element<'a, Message> {
+    let mut cell = cell(content, width(column));
     if matches!(column, SortKey::Id | SortKey::Words | SortKey::Ease) {
         cell = cell.align_x(Right);
     }
