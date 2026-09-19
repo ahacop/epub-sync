@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use epubsync_core::config::{self, Config};
-use epubsync_core::library::{ImportOutcome, Library, Stats};
-use epubsync_core::metadata::{Author, Series};
+use epubsync_core::library::{Book, Field, ImportOutcome, Library, Stats};
+use epubsync_core::metadata::{Author, Metadata, Series};
 use epubsync_epub::Epub;
 use epubsync_epub::fixtures as common;
 
@@ -334,6 +334,72 @@ fn edit_updates_the_row_the_revision_and_the_file() {
         common::read_entry(&lib.book_path(id), "mimetype"),
         "application/epub+zip"
     );
+}
+
+#[test]
+fn fields_lists_the_details_the_book_has() {
+    let mut book = Book {
+        id: 1,
+        revision: 1,
+        metadata: Metadata {
+            title: "Can You Forgive Her?".into(),
+            publisher: Some("Chapman & Hall".into()),
+            series: Some(Series {
+                name: "Palliser".into(),
+                number: Some(1.0),
+            }),
+            ..Metadata::default()
+        },
+        stats: Stats {
+            word_count: Some(121_970),
+            reading_ease: Some(60.95),
+        },
+    };
+    let series = book.metadata.series.clone().unwrap();
+    assert_eq!(
+        book.fields(),
+        [
+            Field::Publisher("Chapman & Hall"),
+            Field::Series(&series),
+            Field::WordCount(121_970),
+            Field::ReadingEase(60.95),
+        ]
+    );
+
+    book.metadata.series = None;
+    book.stats.reading_ease = None;
+    assert_eq!(
+        book.fields(),
+        [
+            Field::Publisher("Chapman & Hall"),
+            Field::WordCount(121_970)
+        ]
+    );
+}
+
+#[test]
+fn book_progress_reads_one_book_in_device_order() {
+    let s = setup();
+    let mut lib = Library::open(&s.config).unwrap();
+    let source = common::write_epub(&s.root, "lhod.epub", common::EPUB2_OPF);
+    let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    lib.db
+        .execute_batch(&format!(
+            "INSERT INTO devices (serial) VALUES ('N1'), ('N2');
+             INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
+               ({id}, 'N2', 100, 2, NULL),
+               ({id}, 'N1', 37, 1, '2026-09-01');"
+        ))
+        .unwrap();
+
+    let rows = lib.book_progress(id).unwrap();
+    let serials: Vec<&str> = rows.iter().map(|p| p.device_serial.as_str()).collect();
+    assert_eq!(serials, ["N1", "N2"]);
+    assert_eq!(rows[0].percent, 37);
+    assert_eq!(rows[0].last_read.as_deref(), Some("2026-09-01"));
+    assert!(lib.book_progress(id + 1).unwrap().is_empty());
 }
 
 #[test]

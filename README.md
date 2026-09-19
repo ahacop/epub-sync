@@ -30,6 +30,7 @@ one file and needs no other program on `PATH`.
 epubsync init ~/Books/epubsync      # create the library folder and point the config at it
 epubsync import book.epub           # convert to KEPUB and add it; a folder imports every EPUB in it
 epubsync list                       # every book: id, title, authors, series, progress per device
+epubsync show 3                     # one book's whole record, stats, file path, and progress
 epubsync edit 3                     # open the metadata as TOML in $EDITOR
 epubsync edit 3 --title "New Title" # set one field without the editor
 epubsync remove 3                   # delete the file and its rows

@@ -11,7 +11,7 @@ use epubsync_core::config::{self, Config};
 use epubsync_core::device::{Action, Device, ReadStatus, RowUpdate};
 use epubsync_core::kobo::eject::Ejected;
 use epubsync_core::kobo::{self, Kobo};
-use epubsync_core::library::{Book, ImportOutcome, Library, ProgressRow};
+use epubsync_core::library::{Book, Field, ImportOutcome, Library, ProgressRow};
 use epubsync_core::metadata::{Author, Metadata, Series, format_series_number};
 use epubsync_core::sort_name::sort_name;
 use epubsync_core::sync::{self as core_sync, Gate};
@@ -40,6 +40,8 @@ enum Command {
     },
     /// List every book with its id, metadata, and progress per device
     List,
+    /// Print one book's whole record, its stats, its file path, and its progress per device
+    Show { book: i64 },
     /// Edit a book's metadata in $EDITOR, or one field per flag
     Edit {
         book: i64,
@@ -126,6 +128,7 @@ fn run(command: Command) -> Result<()> {
         Command::Init { .. } => unreachable!(),
         Command::Import { path, force } => import(&config, &path, force),
         Command::List => list(&config),
+        Command::Show { book } => show(&config, book),
         Command::Edit {
             book,
             title,
@@ -221,6 +224,52 @@ fn list(config: &Config) -> Result<()> {
             line.push_str(&format!("  {}", progress_cell(p)));
         }
         println!("{line}");
+    }
+    Ok(())
+}
+
+/// One label and value per line, then the description as Markdown after a
+/// blank line. A field the book does not have gets no line.
+fn show(config: &Config, id: i64) -> Result<()> {
+    let lib = Library::open(config)?;
+    let book = lib.get(id)?;
+    let progress = lib.book_progress(id)?;
+    let m = &book.metadata;
+
+    let mut lines = vec![("Id", book.id.to_string()), ("Title", m.title.clone())];
+    for author in &m.authors {
+        lines.push(("Author", format!("{} (sort: {})", author.name, author.sort)));
+    }
+    lines.extend(book.fields().into_iter().map(|f| match f {
+        Field::Publisher(p) => ("Publisher", p.to_string()),
+        // A series can have no number: a file with a series name and no
+        // index, or an edit that sets `--series` alone.
+        Field::Series(s) => match s.number {
+            Some(n) => (
+                "Series",
+                format!("{}, book {}", s.name, format_series_number(n)),
+            ),
+            None => ("Series", s.name.clone()),
+        },
+        Field::WordCount(w) => ("Words", w.to_string()),
+        Field::ReadingEase(e) => ("Ease", format!("{e:.0}")),
+    }));
+    lines.push(("Revision", book.revision.to_string()));
+    lines.push(("File", lib.book_path(id).display().to_string()));
+    if progress.is_empty() {
+        lines.push(("Device", "not yet sent to a device".to_string()));
+    }
+    for p in &progress {
+        lines.push(("Device", progress_cell(p)));
+    }
+
+    for (label, value) in lines {
+        println!("{label:<11}{value}");
+    }
+    if let Some(d) = &m.description {
+        // htmd fails only when its writer fails, which a String does not.
+        let text = htmd::convert(d).unwrap_or_else(|_| d.clone());
+        println!("\n{}", text.trim());
     }
     Ok(())
 }

@@ -258,6 +258,70 @@ fn syncs_to_a_folder_that_looks_like_a_kobo() {
 }
 
 #[test]
+fn shows_one_book() {
+    let env = Env::new();
+    env.init();
+    let opf = OPF.replace(
+        "<dc:language>en</dc:language>",
+        "<dc:language>en</dc:language>
+    <dc:publisher>Ace</dc:publisher>
+    <dc:description>&lt;p&gt;A &lt;em&gt;human&lt;/em&gt; envoy.&lt;/p&gt;</dc:description>",
+    );
+    let epub = write_epub(env.dir.path(), "lhod.epub", &opf);
+    env.cmd()
+        .args(["import", epub.to_str().unwrap()])
+        .assert()
+        .success();
+
+    env.cmd()
+        .args(["show", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Device     not yet sent to a device\n",
+        ));
+
+    let db = rusqlite::Connection::open(env.dir.path().join("library/library.sqlite")).unwrap();
+    db.execute_batch(
+        "INSERT INTO devices (serial) VALUES ('N1');
+         INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
+           (1, 'N1', 37, 1, '2026-09-01T10:00:00Z');",
+    )
+    .unwrap();
+    drop(db);
+
+    let out = env
+        .cmd()
+        .args(["show", "1"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(out).unwrap();
+    let file = env.dir.path().join("library/1.kepub.epub");
+    for line in [
+        "Id         1\n",
+        "Title      The Left Hand of Darkness\n",
+        "Author     Ursula K. Le Guin (sort: Le Guin, Ursula K.)\n",
+        "Publisher  Ace\nSeries     Hainish Cycle, book 4\nWords      1\n",
+        "Ease       ",
+        "Revision   1\n",
+        &format!("File       {}\n", file.display()),
+        "Device     N1: 37% reading 2026-09-01\n",
+        "\nA *human* envoy.\n",
+    ] {
+        assert!(out.contains(line), "{line:?} not in:\n{out}");
+    }
+
+    env.cmd()
+        .args(["show", "2"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no book with id 2"));
+}
+
+#[test]
 fn lists_progress_and_words() {
     let env = Env::new();
     env.init();

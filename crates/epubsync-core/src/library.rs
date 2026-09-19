@@ -39,6 +39,33 @@ pub struct Book {
     pub stats: Stats,
 }
 
+/// One optional detail of a book, with its value as the library stores
+/// it. A display picks the label and the text for each one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Field<'a> {
+    Publisher(&'a str),
+    Series(&'a Series),
+    WordCount(u64),
+    ReadingEase(f64),
+}
+
+impl Book {
+    /// The optional details the book has, in the order a display lists
+    /// them. A detail the book does not have gets no entry.
+    pub fn fields(&self) -> Vec<Field<'_>> {
+        let m = &self.metadata;
+        [
+            m.publisher.as_deref().map(Field::Publisher),
+            m.series.as_ref().map(Field::Series),
+            self.stats.word_count.map(Field::WordCount),
+            self.stats.reading_ease.map(Field::ReadingEase),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportOutcome {
     /// The file is in the library. `made_sort` lists the authors that got
@@ -353,6 +380,16 @@ pub struct ProgressRow {
     pub last_read: Option<String>,
 }
 
+/// Reads the four progress columns that start at column `first`.
+fn progress_from_row(r: &rusqlite::Row, first: usize) -> rusqlite::Result<ProgressRow> {
+    Ok(ProgressRow {
+        device_serial: r.get(first)?,
+        percent: r.get(first + 1)?,
+        status: r.get(first + 2)?,
+        last_read: r.get(first + 3)?,
+    })
+}
+
 /// One looked-up word as the library stores it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WordRow {
@@ -372,23 +409,23 @@ impl Library {
         let mut stmt = self.db.prepare(
             "SELECT book_id, device_serial, percent, status, last_read FROM progress ORDER BY book_id, device_serial",
         )?;
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                ProgressRow {
-                    device_serial: r.get(1)?,
-                    percent: r.get(2)?,
-                    status: r.get(3)?,
-                    last_read: r.get(4)?,
-                },
-            ))
-        })?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, progress_from_row(r, 1)?)))?;
         let mut by_book: BTreeMap<i64, Vec<ProgressRow>> = BTreeMap::new();
         for row in rows {
             let (book_id, progress) = row?;
             by_book.entry(book_id).or_default().push(progress);
         }
         Ok(by_book)
+    }
+
+    /// One book's progress rows in device order. A book with no rows, or
+    /// no book with that id, gives an empty list.
+    pub fn book_progress(&self, book_id: i64) -> Result<Vec<ProgressRow>> {
+        let mut stmt = self.db.prepare(
+            "SELECT device_serial, percent, status, last_read FROM progress WHERE book_id = ?1 ORDER BY device_serial",
+        )?;
+        let rows = stmt.query_map([book_id], |r| progress_from_row(r, 0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The looked-up words, newest first, filtered by book id and device
