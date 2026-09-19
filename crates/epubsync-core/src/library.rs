@@ -20,6 +20,7 @@ use crate::{kepub, stats};
 use epubsync_epub::Epub;
 
 const TABLES_SQL: &str = include_str!("migrations/1-tables.sql");
+const BOOKS_AUTOINCREMENT_SQL: &str = include_str!("migrations/2-books-autoincrement.sql");
 const DB_NAME: &str = "library.sqlite";
 const LOCK_NAME: &str = "lock";
 const IMPORT_TEMP: &str = "import.tmp";
@@ -118,11 +119,14 @@ impl Library {
         let db_path = folder.join(DB_NAME);
         let mut db =
             Connection::open(&db_path).with_context(|| format!("open {}", db_path.display()))?;
+        // Foreign keys are off while the migrations run, as SQLite advises
+        // for schema changes, and on after. The bundled SQLite turns them
+        // on by default, so they are turned off here first. A migration
+        // that rebuilds a table runs `foreign_key_check` at its end.
+        db.execute_batch("PRAGMA foreign_keys = OFF;")?;
         migrations()
             .to_latest(&mut db)
             .context("migrate the database")?;
-        // Foreign keys go on after the migrations, as SQLite advises for
-        // schema changes.
         db.execute_batch("PRAGMA foreign_keys = ON;")?;
         Ok(Library {
             folder,
@@ -296,7 +300,10 @@ impl Library {
 /// runs in a transaction, so a change that fails leaves the database as
 /// it was.
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(TABLES_SQL)])
+    Migrations::new(vec![
+        M::up(TABLES_SQL),
+        M::up(BOOKS_AUTOINCREMENT_SQL).foreign_key_check(),
+    ])
 }
 
 /// The name of a book's file in the library folder.

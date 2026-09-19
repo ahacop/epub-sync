@@ -446,3 +446,46 @@ fn remove_deletes_the_file_and_the_rows_but_keeps_words() {
     assert_eq!(count("words"), 1);
     assert!(lib.remove(id).is_err());
 }
+
+#[test]
+fn a_new_book_never_takes_the_id_of_a_removed_one() {
+    let s = setup();
+    let mut lib = Library::open(&s.config).unwrap();
+    let source = common::write_epub(&s.root, "lhod.epub", common::EPUB2_OPF);
+    let ImportOutcome::Imported { id: first, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    lib.remove(first).unwrap();
+    let ImportOutcome::Imported { id: second, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    assert!(second > first, "{second} after {first}");
+}
+
+#[test]
+fn the_migration_starts_book_ids_above_the_ids_word_rows_hold() {
+    let s = setup();
+    // A database at migration 1: book 1 is in the library, and a word row
+    // holds book 5, which was removed.
+    std::fs::remove_file(s.config.library.join("library.sqlite")).unwrap();
+    let db = rusqlite::Connection::open(s.config.library.join("library.sqlite")).unwrap();
+    db.execute_batch(include_str!("../src/migrations/1-tables.sql"))
+        .unwrap();
+    db.execute_batch(
+        "PRAGMA user_version = 1;
+         INSERT INTO books (id, title) VALUES (1, 'Kept');
+         INSERT INTO book_authors (book_id, position, name, sort) VALUES (1, 0, 'A', 'A');
+         INSERT INTO words (word, device_serial, book_id, volume_id, looked_up_at)
+             VALUES ('ansible', 'N123', 5, 'file:///mnt/onboard/EpubSync/5.kepub.epub', '2026-01-01');",
+    )
+    .unwrap();
+    drop(db);
+
+    let mut lib = Library::open(&s.config).unwrap();
+    assert_eq!(lib.get(1).unwrap().metadata.title, "Kept");
+    let source = common::write_epub(&s.root, "lhod.epub", common::EPUB2_OPF);
+    let ImportOutcome::Imported { id, .. } = lib.import(&source, false).unwrap() else {
+        panic!();
+    };
+    assert_eq!(id, 6);
+}
