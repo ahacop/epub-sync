@@ -46,26 +46,36 @@ fn write_epub(dir: &Path, name: &str, opf: &str) -> PathBuf {
 }
 
 struct Env {
-    dir: tempfile::TempDir,
+    /// Deletes the temp folder when the test ends.
+    _dir: tempfile::TempDir,
+    /// The temp folder with symlinks resolved. The library stores its
+    /// folder canonicalized, so a path the CLI prints matches a path built
+    /// from this one. On macOS the plain temp path starts with `/tmp`,
+    /// a symlink to `/private/tmp`, and would not match.
+    root: PathBuf,
 }
 
 impl Env {
     fn new() -> Env {
-        Env {
-            dir: tempfile::tempdir().unwrap(),
-        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        Env { _dir: dir, root }
+    }
+
+    fn path(&self) -> &Path {
+        &self.root
     }
 
     fn cmd(&self) -> Command {
         let mut cmd = Command::cargo_bin("epubsync").unwrap();
-        cmd.env("EPUBSYNC_CONFIG", self.dir.path().join("config.toml"));
+        cmd.env("EPUBSYNC_CONFIG", self.path().join("config.toml"));
         cmd.env_remove("EDITOR");
         cmd
     }
 
     fn init(&self) {
         self.cmd()
-            .args(["init", self.dir.path().join("library").to_str().unwrap()])
+            .args(["init", self.path().join("library").to_str().unwrap()])
             .assert()
             .success();
     }
@@ -93,9 +103,9 @@ fn every_command_but_init_needs_the_config() {
 fn init_import_list_edit_remove() {
     let env = Env::new();
     env.init();
-    assert!(env.dir.path().join("library/library.sqlite").exists());
+    assert!(env.path().join("library/library.sqlite").exists());
 
-    let epub = write_epub(env.dir.path(), "lhod.epub", OPF);
+    let epub = write_epub(env.path(), "lhod.epub", OPF);
     env.cmd()
         .args(["import", epub.to_str().unwrap()])
         .assert()
@@ -104,7 +114,7 @@ fn init_import_list_edit_remove() {
         .stdout(predicate::str::contains(
             "made sort name for Ursula K. Le Guin: Le Guin, Ursula K.",
         ));
-    assert!(env.dir.path().join("library/1.kepub.epub").exists());
+    assert!(env.path().join("library/1.kepub.epub").exists());
 
     env.cmd()
         .args(["import", epub.to_str().unwrap()])
@@ -144,14 +154,14 @@ fn init_import_list_edit_remove() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("--yes"));
-    assert!(env.dir.path().join("library/1.kepub.epub").exists());
+    assert!(env.path().join("library/1.kepub.epub").exists());
 
     env.cmd()
         .args(["remove", "1", "--yes"])
         .assert()
         .success()
         .stdout("removed 1 \"The Left Hand\"\n");
-    assert!(!env.dir.path().join("library/1.kepub.epub").exists());
+    assert!(!env.path().join("library/1.kepub.epub").exists());
     env.cmd().arg("list").assert().success().stdout("");
 }
 
@@ -159,7 +169,7 @@ fn init_import_list_edit_remove() {
 fn imports_a_folder() {
     let env = Env::new();
     env.init();
-    let books = env.dir.path().join("books");
+    let books = env.path().join("books");
     std::fs::create_dir(&books).unwrap();
     write_epub(&books, "a.epub", OPF);
     write_epub(
@@ -180,14 +190,14 @@ fn imports_a_folder() {
 fn edits_through_the_editor() {
     let env = Env::new();
     env.init();
-    let epub = write_epub(env.dir.path(), "lhod.epub", OPF);
+    let epub = write_epub(env.path(), "lhod.epub", OPF);
     env.cmd()
         .args(["import", epub.to_str().unwrap()])
         .assert()
         .success();
 
     // An "editor" that rewrites the title with sed.
-    let editor = env.dir.path().join("editor.sh");
+    let editor = env.path().join("editor.sh");
     std::fs::write(
         &editor,
         "#!/bin/sh\nsed -i 's/The Left Hand of Darkness/Winter/' \"$1\"\n",
@@ -210,13 +220,13 @@ fn edits_through_the_editor() {
 fn syncs_to_a_folder_that_looks_like_a_kobo() {
     let env = Env::new();
     env.init();
-    let epub = write_epub(env.dir.path(), "lhod.epub", OPF);
+    let epub = write_epub(env.path(), "lhod.epub", OPF);
     env.cmd()
         .args(["import", epub.to_str().unwrap()])
         .assert()
         .success();
 
-    let kobo = env.dir.path().join("KOBOeReader");
+    let kobo = env.path().join("KOBOeReader");
     std::fs::create_dir_all(kobo.join(".kobo")).unwrap();
     std::fs::write(
         kobo.join(".kobo/version"),
@@ -302,7 +312,7 @@ fn shows_one_book() {
     <dc:publisher>Ace</dc:publisher>
     <dc:description>&lt;p&gt;A &lt;em&gt;human&lt;/em&gt; envoy.&lt;/p&gt;</dc:description>",
     );
-    let epub = write_epub(env.dir.path(), "lhod.epub", &opf);
+    let epub = write_epub(env.path(), "lhod.epub", &opf);
     env.cmd()
         .args(["import", epub.to_str().unwrap()])
         .assert()
@@ -316,7 +326,7 @@ fn shows_one_book() {
             "Device     not yet sent to a device\n",
         ));
 
-    let db = rusqlite::Connection::open(env.dir.path().join("library/library.sqlite")).unwrap();
+    let db = rusqlite::Connection::open(env.path().join("library/library.sqlite")).unwrap();
     db.execute_batch(
         "INSERT INTO devices (serial) VALUES ('N1');
          INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
@@ -334,7 +344,7 @@ fn shows_one_book() {
         .stdout
         .clone();
     let out = String::from_utf8(out).unwrap();
-    let file = env.dir.path().join("library/1.kepub.epub");
+    let file = env.path().join("library/1.kepub.epub");
     for line in [
         "Id         1\n",
         "Title      The Left Hand of Darkness\n",
@@ -382,13 +392,13 @@ fn shows_one_book() {
 fn lists_progress_and_words() {
     let env = Env::new();
     env.init();
-    let epub = write_epub(env.dir.path(), "lhod.epub", OPF);
+    let epub = write_epub(env.path(), "lhod.epub", OPF);
     env.cmd()
         .args(["import", epub.to_str().unwrap()])
         .assert()
         .success();
 
-    let db = rusqlite::Connection::open(env.dir.path().join("library/library.sqlite")).unwrap();
+    let db = rusqlite::Connection::open(env.path().join("library/library.sqlite")).unwrap();
     db.execute_batch(
         "INSERT INTO devices (serial) VALUES ('N1'), ('N2');
          INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
@@ -426,7 +436,7 @@ fn lists_progress_and_words() {
             "authors": [{"name": "Ursula K. Le Guin", "sort": "Le Guin, Ursula K."}],
             "series": {"name": "Hainish Cycle", "number": 4.0},
             "word_count": 1,
-            "file": env.dir.path().join("library/1.kepub.epub").to_str().unwrap(),
+            "file": env.path().join("library/1.kepub.epub").to_str().unwrap(),
             "progress": [
                 {"device_serial": "N1", "percent": 37, "status": "reading", "last_read": "2026-09-01T10:00:00Z"},
                 {"device_serial": "N2", "percent": 100, "status": "finished", "last_read": "2026-08-01T10:00:00Z"},
@@ -515,7 +525,7 @@ fn lists_progress_and_words() {
 fn library_of_three() -> Env {
     let env = Env::new();
     env.init();
-    let books = env.dir.path().join("books");
+    let books = env.path().join("books");
     std::fs::create_dir(&books).unwrap();
     write_epub(&books, "a.epub", OPF);
     write_epub(
@@ -539,7 +549,7 @@ fn library_of_three() -> Env {
         .args(["import", books.to_str().unwrap()])
         .assert()
         .success();
-    let db = rusqlite::Connection::open(env.dir.path().join("library/library.sqlite")).unwrap();
+    let db = rusqlite::Connection::open(env.path().join("library/library.sqlite")).unwrap();
     db.execute_batch(
         "INSERT INTO devices (serial) VALUES ('N1');
          INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
@@ -650,7 +660,7 @@ fn list_sorts_by_a_key_and_reverses() {
 fn eject_skips_a_folder_that_is_not_a_volume() {
     let env = Env::new();
     env.init();
-    let kobo = env.dir.path().join("KOBOeReader");
+    let kobo = env.path().join("KOBOeReader");
     std::fs::create_dir_all(kobo.join(".kobo")).unwrap();
     std::fs::write(
         kobo.join(".kobo/version"),
