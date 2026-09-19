@@ -1,7 +1,8 @@
 //! The library viewer: a window with a table of books and, when a book is
 //! selected, its details in a sidebar on the right. A Words tab swaps the
-//! table for the list of words looked up on a device. It is read-only.
-//! The CLI imports, edits, removes, and syncs.
+//! table for the list of words looked up on a device. It reads the
+//! library and never writes it. The CLI imports, edits, removes, and
+//! syncs. A Reload button reads the library again.
 
 mod description;
 mod detail;
@@ -11,7 +12,6 @@ mod theme;
 mod words;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use epubsync_core::config;
 use epubsync_core::device::ReadStatus;
@@ -24,7 +24,6 @@ use iced::{Center, Element, Fill, Subscription, Task, padding};
 use crate::theme::{BODY, MONO, SANS_SEMIBOLD};
 
 /// The state of the viewer window: what it draws.
-#[derive(Debug, Clone)]
 enum Viewer {
     /// The library could not be opened. The window shows the error text.
     OpenFailed(String),
@@ -34,10 +33,10 @@ enum Viewer {
     Open(Box<Open>),
 }
 
-#[derive(Debug, Clone)]
 struct Open {
-    /// The library folder. The status bar shows it.
-    folder: PathBuf,
+    /// The open library. It holds the lock for the life of the window,
+    /// so a CLI command fails while the window shows the library.
+    library: Library,
     /// The books in id order. The table sorts a borrowed view.
     books: Vec<Book>,
     /// Reading progress by book id, one row per device.
@@ -56,6 +55,9 @@ struct Open {
     scroll: f32,
     /// The book in the sidebar, if any.
     selected: Option<Selected>,
+    /// Why the last reload failed, if it did. The status bar shows it
+    /// until a reload succeeds.
+    error: Option<String>,
 }
 
 /// The pane in the main area: the table of books, or the list of words.
@@ -87,18 +89,14 @@ enum Message {
     Filter(String),
     /// The table body scrolled to this offset in pixels.
     Scrolled(f32),
+    /// The Reload button. The viewer reads the library again.
+    Reload,
     /// A click on a link in the description. It does nothing.
     LinkClicked,
 }
 
 fn main() -> iced::Result {
-    // The library stays open for the life of the window. Its lock keeps a
-    // CLI command from changing the library while the window shows it.
-    let (_library, viewer) = match open() {
-        Ok((library, viewer)) => (Some(library), viewer),
-        Err(e) => (None, Viewer::OpenFailed(format!("{e:#}"))),
-    };
-    iced::application(move || viewer.clone(), update, view)
+    iced::application(boot, update, view)
         .title("EpubSync")
         .window_size((1180.0, 760.0))
         .default_font(theme::SANS)
@@ -123,20 +121,79 @@ fn subscription(_viewer: &Viewer) -> Subscription<Message> {
     })
 }
 
-fn open() -> anyhow::Result<(Library, Viewer)> {
+/// The state at start: the open library, or the reason it did not open.
+fn boot() -> Viewer {
+    match open() {
+        Ok(open) => Viewer::Open(Box::new(open)),
+        Err(e) => Viewer::OpenFailed(format!("{e:#}")),
+    }
+}
+
+fn open() -> anyhow::Result<Open> {
     let config = config::load(&config::path()?)?;
     let library = Library::open(&config)?;
-    let open = Open {
-        folder: library.folder.clone(),
-        books: library.list()?,
-        progress: library.progress()?,
-        words: library.words(None, None)?,
-        pane: Pane::Books,
-        query: Query::default(),
-        scroll: 0.0,
-        selected: None,
-    };
-    Ok((library, Viewer::Open(Box::new(open))))
+    Open::new(library)
+}
+
+impl Open {
+    /// The state for an open library, with its books, progress, and
+    /// words read once.
+    fn new(library: Library) -> anyhow::Result<Open> {
+        let mut open = Open {
+            library,
+            books: Vec::new(),
+            progress: BTreeMap::new(),
+            words: Vec::new(),
+            pane: Pane::Books,
+            query: Query::default(),
+            scroll: 0.0,
+            selected: None,
+            error: None,
+        };
+        open.read()?;
+        Ok(open)
+    }
+
+    /// Reads the books, the progress, and the words from the library.
+    /// The state changes only when all three reads succeed.
+    fn read(&mut self) -> anyhow::Result<()> {
+        let books = self.library.list()?;
+        let progress = self.library.progress()?;
+        let words = self.library.words(None, None)?;
+        self.books = books;
+        self.progress = progress;
+        self.words = words;
+        Ok(())
+    }
+
+    /// Reads the library again. The sort, the filter, and the scroll
+    /// offset stay. The sidebar stays on its book with the description
+    /// parsed again, and closes when the book is gone. A read that
+    /// fails keeps the rows from the last read and puts the error in
+    /// the status bar.
+    ///
+    /// The viewer holds the library lock, so no other process writes
+    /// while the window is open. A write from the viewer ends with a
+    /// reload.
+    fn reload(&mut self) {
+        self.error = self.read().err().map(|e| format!("{e:#}"));
+        if let Some(id) = self.selected.as_ref().map(|s| s.id) {
+            self.select(id);
+        }
+    }
+
+    /// Puts the book in the sidebar. Its description is parsed here, so
+    /// a book that is never shown is never parsed. An id no book has
+    /// closes the sidebar.
+    fn select(&mut self, id: i64) {
+        self.selected = self.books.iter().find(|b| b.id == id).map(|b| {
+            let html = b.metadata.description.as_deref().unwrap_or("");
+            Selected {
+                id,
+                description: description::parse(html),
+            }
+        });
+    }
 }
 
 fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
@@ -144,19 +201,7 @@ fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
         return Task::none();
     };
     match message {
-        Message::Select(id) => {
-            // The description is parsed only when the book is shown.
-            let html = open
-                .books
-                .iter()
-                .find(|b| b.id == id)
-                .and_then(|b| b.metadata.description.as_deref())
-                .unwrap_or("");
-            open.selected = Some(Selected {
-                id,
-                description: description::parse(html),
-            });
-        }
+        Message::Select(id) => open.select(id),
         Message::Close => open.selected = None,
         Message::Show(pane) => {
             // The two panes share one scrollable id, so the new pane
@@ -182,6 +227,7 @@ fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
             return table::scroll_to_top();
         }
         Message::Scrolled(offset) => open.scroll = offset,
+        Message::Reload => open.reload(),
         Message::LinkClicked => {}
     }
     Task::none()
@@ -226,8 +272,8 @@ fn count(n: usize, noun: &str) -> String {
 }
 
 /// The toolbar: the Library and Words tabs, the count for the pane in
-/// view, and the filter field. The count reads "4 of 23 books" while
-/// the filter is set.
+/// view, the filter field, and the Reload button. The count reads
+/// "4 of 23 books" while the filter is set.
 fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
     let (total, noun, placeholder) = match open.pane {
         Pane::Books => (
@@ -254,12 +300,17 @@ fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
         .size(13)
         .padding([5, 10])
         .style(theme::filter);
+    let reload = button(text("Reload").size(13))
+        .on_press(Message::Reload)
+        .padding([5, 10])
+        .style(theme::action);
     let bar = row![
         tab("Library", Pane::Books),
         tab("Words", Pane::Words),
         text(count).size(BODY).style(theme::text_color(|c| c.muted)),
         space().width(Fill),
         filter,
+        reload,
     ]
     .spacing(14)
     .align_y(Center)
@@ -270,7 +321,8 @@ fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
 
 /// The status bar: the count, how many books are reading and finished by
 /// the progress row read last, how many were finished this year by
-/// their finished date, and the library folder.
+/// their finished date, and the library folder. The error of a failed
+/// reload takes the place of the counts.
 fn status_bar(open: &Open) -> Element<'_, Message> {
     let has_status = |status: ReadStatus| {
         open.books
@@ -284,20 +336,25 @@ fn status_bar(open: &Open) -> Element<'_, Message> {
         .iter()
         .filter(|b| query::finished(&open.progress, b.id).is_some_and(|d| d.starts_with(&year)))
         .count();
-    let counts = format!(
-        "{} reading · {} finished · {this_year} this year",
-        has_status(ReadStatus::Reading),
-        has_status(ReadStatus::Finished)
-    );
+    let counts = match &open.error {
+        Some(error) => text(format!("Reload failed: {error}"))
+            .size(11.5)
+            .style(theme::text_color(|c| c.ink)),
+        None => text(format!(
+            "{} reading · {} finished · {this_year} this year",
+            has_status(ReadStatus::Reading),
+            has_status(ReadStatus::Finished)
+        ))
+        .size(11.5)
+        .style(theme::text_color(|c| c.muted)),
+    };
     let bar = row![
         text(count(open.books.len(), "book"))
             .size(11.5)
             .style(theme::text_color(|c| c.muted)),
-        text(counts)
-            .size(11.5)
-            .style(theme::text_color(|c| c.muted)),
+        counts,
         space().width(Fill),
-        text(open.folder.display().to_string())
+        text(open.library.folder.display().to_string())
             .font(MONO)
             .size(11)
             .wrapping(text::Wrapping::None)

@@ -23,6 +23,11 @@ and `show --json` adds a `history` array. The progress objects in `--json`
 output gain `time_spent` and `finished_at`. The sync report says how many
 books' progress changed.
 
+The viewer gets a Reload button at the right of the toolbar. It reads the
+books, the progress, and the words again and keeps the sort, the filter,
+and the sidebar. The `Library` value now lives in the viewer state, which
+is what the writes from the viewer will need.
+
 ## 0.1.8 (2026-09-17)
 
 A sync from macOS no longer leaves a `._` file next to each book it sends.

@@ -248,7 +248,7 @@ fn description_settings() -> markdown::Settings {
 
 /// The full file path on one line, clipped.
 fn footer<'a>(open: &'a Open, book: &'a Book) -> Element<'a, Message> {
-    let path = open.folder.join(book_file_name(book.id));
+    let path = open.library.folder.join(book_file_name(book.id));
     container(
         text(path.display().to_string())
             .font(MONO)

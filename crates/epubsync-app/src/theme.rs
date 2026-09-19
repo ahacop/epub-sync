@@ -270,6 +270,28 @@ pub fn close(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+/// A toolbar button such as Reload: a `surface` box with a `line_strong`
+/// border, the same shape as the filter field, that sits on `surface_2`
+/// under the pointer.
+pub fn action(theme: &Theme, status: button::Status) -> button::Style {
+    let c = colors(theme);
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: Some(Background::Color(if hovered {
+            c.surface_2
+        } else {
+            c.surface
+        })),
+        text_color: c.ink,
+        border: Border {
+            color: c.line_strong,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..button::Style::default()
+    }
+}
+
 /// The filter field: a `surface` box with a `line_strong` border that turns
 /// `accent` while the field has focus.
 pub fn filter(theme: &Theme, status: text_input::Status) -> text_input::Style {
