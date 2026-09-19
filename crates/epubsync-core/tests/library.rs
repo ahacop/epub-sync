@@ -403,7 +403,7 @@ fn book_progress_reads_one_book_in_device_order() {
 }
 
 #[test]
-fn remove_deletes_the_file_and_the_rows_but_keeps_words() {
+fn remove_deletes_the_file_and_marks_the_book_row() {
     let s = setup();
     let mut lib = Library::open(&s.config).unwrap();
     let source = common::write_epub(&s.root, "lhod.epub", common::EPUB2_OPF);
@@ -424,8 +424,8 @@ fn remove_deletes_the_file_and_the_rows_but_keeps_words() {
         .unwrap();
     lib.db
         .execute(
-            "INSERT INTO words (word, device_serial, book_id, volume_id, book_title, dict_suffix, looked_up_at)
-             VALUES ('ansible', 'N123', ?1, 'file:///mnt/onboard/EpubSync/1.kepub.epub', 'The Left Hand of Darkness', '-en', '2026-01-01')",
+            "INSERT INTO words (word, device_serial, book_id, dict_suffix, looked_up_at)
+             VALUES ('ansible', 'N123', ?1, '-en', '2026-01-01')",
             [id],
         )
         .unwrap();
@@ -434,16 +434,27 @@ fn remove_deletes_the_file_and_the_rows_but_keeps_words() {
     lib.remove(id).unwrap();
     assert!(!path.exists());
     assert!(lib.list().unwrap().is_empty());
+    assert!(lib.get(id).is_err());
     let count = |table: &str| -> i64 {
         lib.db
             .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
             .unwrap()
     };
-    assert_eq!(count("book_authors"), 0);
-    assert_eq!(count("book_stats"), 0);
+    assert_eq!(count("books"), 1);
+    assert_eq!(count("book_authors"), 1);
+    assert_eq!(count("book_stats"), 1);
     assert_eq!(count("sent"), 0);
     assert_eq!(count("progress"), 0);
-    assert_eq!(count("words"), 1);
+    let deleted_at: Option<String> = lib
+        .db
+        .query_row("SELECT deleted_at FROM books WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(deleted_at.is_some());
+    let words = lib.words(Some(id), None).unwrap();
+    assert_eq!(words.len(), 1);
+    assert_eq!(words[0].book_title, "The Left Hand of Darkness");
     assert!(lib.remove(id).is_err());
 }
 
@@ -488,4 +499,40 @@ fn the_migration_starts_book_ids_above_the_ids_word_rows_hold() {
         panic!();
     };
     assert_eq!(id, 6);
+}
+
+#[test]
+fn the_migration_drops_word_rows_without_a_book() {
+    let s = setup();
+    // A database at migration 2: book 1 is in the library. One word row
+    // holds book 1, one holds book 5, which was removed, and one holds no
+    // book.
+    std::fs::remove_file(s.config.library.join("library.sqlite")).unwrap();
+    let db = rusqlite::Connection::open(s.config.library.join("library.sqlite")).unwrap();
+    db.execute_batch(include_str!("../src/migrations/1-tables.sql"))
+        .unwrap();
+    db.execute_batch(include_str!("../src/migrations/2-books-autoincrement.sql"))
+        .unwrap();
+    db.execute_batch(
+        "PRAGMA user_version = 2;
+         INSERT INTO books (id, title) VALUES (1, 'Kept');
+         INSERT INTO words (word, device_serial, book_id, volume_id, book_title, looked_up_at) VALUES
+             ('ansible', 'N123', 1, 'file:///mnt/onboard/EpubSync/1.kepub.epub', 'Old title', '2026-01-01'),
+             ('kemmer', 'N123', 5, 'file:///mnt/onboard/EpubSync/5.kepub.epub', 'Gone', '2026-01-02'),
+             ('shifgrethor', 'N123', NULL, 'store-volume', 'A Store Book', '2026-01-03');",
+    )
+    .unwrap();
+    drop(db);
+
+    let lib = Library::open(&s.config).unwrap();
+    let words = lib.words(None, None).unwrap();
+    assert_eq!(words.len(), 1);
+    assert_eq!(
+        (
+            words[0].word.as_str(),
+            words[0].book_id,
+            words[0].book_title.as_str()
+        ),
+        ("ansible", 1, "Kept")
+    );
 }

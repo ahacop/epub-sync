@@ -101,26 +101,30 @@ impl KoboDb {
             .context("read progress")
     }
 
-    /// Every `WordList` row with the title of the book it came from.
-    /// `book_id_for` maps a volume id to a library book id.
+    /// The `WordList` rows from library books. `book_id_for` maps a
+    /// volume id to a library book id, and a row whose volume id maps to
+    /// no book is skipped.
     pub fn words(&self, book_id_for: impl Fn(&str) -> Option<i64>) -> Result<Vec<Word>> {
         let mut stmt = self.conn.prepare(
-            "SELECT w.Text, w.VolumeId, w.DictSuffix, w.DateCreated, c.Title
-             FROM WordList w LEFT JOIN content c ON c.ContentID = w.VolumeId AND c.ContentType = '6'
-             ORDER BY w.DateCreated",
+            "SELECT Text, VolumeId, DictSuffix, DateCreated FROM WordList ORDER BY DateCreated",
         )?;
         let rows = stmt.query_map([], |r| {
             let volume_id: String = r.get(1)?;
-            Ok(Word {
+            let Some(book_id) = book_id_for(&volume_id) else {
+                return Ok(None);
+            };
+            Ok(Some(Word {
                 word: r.get(0)?,
-                book_id: book_id_for(&volume_id),
-                volume_id,
+                book_id,
                 dict_suffix: r.get(2)?,
                 looked_up_at: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                book_title: r.get(4)?,
-            })
+            }))
         })?;
-        Ok(rows.collect::<Result<_, _>>()?)
+        let mut words = Vec::new();
+        for row in rows {
+            words.extend(row?);
+        }
+        Ok(words)
     }
 
     pub fn close(self) -> Result<()> {

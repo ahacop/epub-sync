@@ -127,11 +127,7 @@ fn body<'a>(open: &'a Open, book: &'a Book, selected: &'a Selected) -> Element<'
         devices = devices.push(device(p));
     }
 
-    let looked_up: Vec<&WordRow> = open
-        .words
-        .iter()
-        .filter(|w| w.book_id == Some(book.id))
-        .collect();
+    let looked_up: Vec<&WordRow> = open.words.iter().filter(|w| w.book_id == book.id).collect();
     let mut words = column![heading("WORDS")].spacing(8);
     if looked_up.is_empty() {
         words = words.push(

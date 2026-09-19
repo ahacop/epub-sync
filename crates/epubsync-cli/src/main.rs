@@ -448,14 +448,9 @@ fn words(config: &Config, book: Option<i64>, device: Option<&str>, json: bool) -
         return print_json(&words);
     }
     for w in words {
-        let title = w.book_title.as_deref().unwrap_or("");
-        let book = w
-            .book_id
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| "-".to_string());
         println!(
-            "{}  {:<24}  {book:>5}  {title}  ({})",
-            w.looked_up_at, w.word, w.device_serial
+            "{}  {:<24}  {:>5}  {}  ({})",
+            w.looked_up_at, w.word, w.book_id, w.book_title, w.device_serial
         );
     }
     Ok(())

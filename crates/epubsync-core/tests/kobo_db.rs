@@ -194,7 +194,7 @@ fn reads_progress() {
 }
 
 #[test]
-fn reads_words_once_and_keeps_store_book_titles() {
+fn reads_words_once_and_skips_words_from_other_books() {
     let dir = tempfile::tempdir().unwrap();
     let mut lib = Library::init(&dir.path().join("library")).unwrap();
     let epub = common::write_epub(dir.path(), "a.epub", common::EPUB2_OPF);
@@ -231,13 +231,12 @@ fn reads_words_once_and_keeps_store_book_titles() {
     let back = sync::read_back(&mut lib, &mut kobo).unwrap();
     assert_eq!(back.progress.len(), 1);
     assert_eq!(back.progress[0].percent, 37);
-    assert_eq!(back.words.len(), 3);
-    let store = back.words.iter().find(|w| w.word == "serendipity").unwrap();
-    assert_eq!(store.book_id, None);
-    assert_eq!(store.volume_id, STORE_VOLUME);
-    assert_eq!(store.book_title.as_deref(), Some("A Store Book"));
-    let lib_word = back.words.iter().find(|w| w.word == "ansible").unwrap();
-    assert_eq!(lib_word.book_id, Some(1));
+    let words: Vec<(&str, i64)> = back
+        .words
+        .iter()
+        .map(|w| (w.word.as_str(), w.book_id))
+        .collect();
+    assert_eq!(words, [("ansible", 1), ("kemmer", 1)]);
 
     // A second read adds nothing.
     let back = sync::read_back(&mut lib, &mut kobo).unwrap();
@@ -246,7 +245,7 @@ fn reads_words_once_and_keeps_store_book_titles() {
         .db
         .query_row("SELECT count(*) FROM words", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 3);
+    assert_eq!(count, 2);
     let progress: (i64, i64, String) = lib
         .db
         .query_row("SELECT percent, status, last_read FROM progress WHERE book_id = 1 AND device_serial = 'N1'", [], |r| {

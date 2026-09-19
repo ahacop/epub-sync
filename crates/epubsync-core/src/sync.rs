@@ -88,9 +88,9 @@ pub fn read_back(library: &mut Library, device: &mut dyn Device) -> Result<ReadB
     let mut new_words = Vec::new();
     for w in &back.words {
         let inserted = tx.execute(
-            "INSERT OR IGNORE INTO words (word, device_serial, book_id, volume_id, book_title, dict_suffix, looked_up_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![w.word, serial, w.book_id, w.volume_id, w.book_title, w.dict_suffix, w.looked_up_at],
+            "INSERT OR IGNORE INTO words (word, device_serial, book_id, dict_suffix, looked_up_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![w.word, serial, w.book_id, w.dict_suffix, w.looked_up_at],
         )?;
         if inserted > 0 {
             new_words.push(w.clone());

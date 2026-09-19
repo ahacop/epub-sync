@@ -86,14 +86,11 @@ pub struct Progress {
     pub last_read: Option<String>,
 }
 
-/// One word looked up in the device dictionary.
+/// One word looked up in the device dictionary in a library book.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Word {
     pub word: String,
-    /// The library book id when the word came from a library book.
-    pub book_id: Option<i64>,
-    pub volume_id: String,
-    pub book_title: Option<String>,
+    pub book_id: i64,
     pub dict_suffix: Option<String>,
     pub looked_up_at: String,
 }

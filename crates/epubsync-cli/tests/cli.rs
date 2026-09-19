@@ -394,10 +394,11 @@ fn lists_progress_and_words() {
          INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
            (1, 'N1', 37, 1, '2026-09-01T10:00:00Z'),
            (1, 'N2', 100, 2, '2026-08-01T10:00:00Z');
-         INSERT INTO words (word, device_serial, book_id, volume_id, book_title, dict_suffix, looked_up_at) VALUES
-           ('ansible', 'N1', 1, 'file:///mnt/onboard/EpubSync/1.kepub.epub', 'The Left Hand of Darkness', '-en', '2026-09-02T08:00:00Z'),
-           ('kemmer', 'N1', 1, 'file:///mnt/onboard/EpubSync/1.kepub.epub', 'The Left Hand of Darkness', '-en', '2026-09-02T09:00:00Z'),
-           ('serendipity', 'N2', NULL, 'store-volume', 'A Store Book', '-en', '2026-09-03T10:00:00Z');",
+         INSERT INTO books (id, title, deleted_at) VALUES (2, 'A Removed Book', '2026-09-03T00:00:00Z');
+         INSERT INTO words (word, device_serial, book_id, dict_suffix, looked_up_at) VALUES
+           ('ansible', 'N1', 1, '-en', '2026-09-02T08:00:00Z'),
+           ('kemmer', 'N1', 1, '-en', '2026-09-02T09:00:00Z'),
+           ('serendipity', 'N2', 2, '-en', '2026-09-03T10:00:00Z');",
     )
     .unwrap();
     drop(db);
@@ -441,11 +442,11 @@ fn lists_progress_and_words() {
     assert_eq!(
         words,
         serde_json::json!([
-            {"word": "serendipity", "device_serial": "N2", "book_id": null, "volume_id": "store-volume",
-             "book_title": "A Store Book", "dict_suffix": "-en", "looked_up_at": "2026-09-03T10:00:00Z"},
-            {"word": "kemmer", "device_serial": "N1", "book_id": 1, "volume_id": "file:///mnt/onboard/EpubSync/1.kepub.epub",
+            {"word": "serendipity", "device_serial": "N2", "book_id": 2,
+             "book_title": "A Removed Book", "dict_suffix": "-en", "looked_up_at": "2026-09-03T10:00:00Z"},
+            {"word": "kemmer", "device_serial": "N1", "book_id": 1,
              "book_title": "The Left Hand of Darkness", "dict_suffix": "-en", "looked_up_at": "2026-09-02T09:00:00Z"},
-            {"word": "ansible", "device_serial": "N1", "book_id": 1, "volume_id": "file:///mnt/onboard/EpubSync/1.kepub.epub",
+            {"word": "ansible", "device_serial": "N1", "book_id": 1,
              "book_title": "The Left Hand of Darkness", "dict_suffix": "-en", "looked_up_at": "2026-09-02T08:00:00Z"},
         ])
     );
@@ -474,7 +475,7 @@ fn lists_progress_and_words() {
         lines[0]
     );
     assert!(
-        lines[0].contains("    -  A Store Book  (N2)"),
+        lines[0].contains("    2  A Removed Book  (N2)"),
         "{}",
         lines[0]
     );

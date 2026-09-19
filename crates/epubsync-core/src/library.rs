@@ -21,6 +21,7 @@ use epubsync_epub::Epub;
 
 const TABLES_SQL: &str = include_str!("migrations/1-tables.sql");
 const BOOKS_AUTOINCREMENT_SQL: &str = include_str!("migrations/2-books-autoincrement.sql");
+const DELETED_BOOKS_SQL: &str = include_str!("migrations/3-deleted-books.sql");
 const DB_NAME: &str = "library.sqlite";
 const LOCK_NAME: &str = "lock";
 const IMPORT_TEMP: &str = "import.tmp";
@@ -196,7 +197,7 @@ impl Library {
         };
         self.db
             .query_row(
-                "SELECT b.id FROM books b JOIN book_authors a ON a.book_id = b.id AND a.position = 0
+                "SELECT b.id FROM active_books b JOIN book_authors a ON a.book_id = b.id AND a.position = 0
                  WHERE b.title = ?1 AND a.name = ?2 ORDER BY b.id LIMIT 1",
                 params![record.title, first.name],
                 |row| row.get(0),
@@ -274,8 +275,9 @@ impl Library {
         self.write_file(id, record, &stats)
     }
 
-    /// Deletes the file, then the book row, its authors, its stats, its
-    /// `sent` rows, and its `progress` rows. Word rows stay.
+    /// Deletes the file, its `sent` rows, and its `progress` rows, then
+    /// sets `deleted_at` on the book row. The row, its authors, and its
+    /// stats stay, so the book's word rows still have a title.
     pub fn remove(&mut self, id: i64) -> Result<()> {
         self.get(id)?;
         let path = self.book_path(id);
@@ -287,9 +289,10 @@ impl Library {
         let tx = self.db.transaction()?;
         tx.execute("DELETE FROM progress WHERE book_id = ?1", [id])?;
         tx.execute("DELETE FROM sent WHERE book_id = ?1", [id])?;
-        tx.execute("DELETE FROM book_authors WHERE book_id = ?1", [id])?;
-        tx.execute("DELETE FROM book_stats WHERE book_id = ?1", [id])?;
-        tx.execute("DELETE FROM books WHERE id = ?1", [id])?;
+        tx.execute(
+            "UPDATE books SET deleted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1",
+            [id],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -303,6 +306,7 @@ fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(TABLES_SQL),
         M::up(BOOKS_AUTOINCREMENT_SQL).foreign_key_check(),
+        M::up(DELETED_BOOKS_SQL).foreign_key_check(),
     ])
 }
 
@@ -313,7 +317,7 @@ pub fn book_file_name(id: i64) -> String {
 
 const BOOK_SELECT: &str =
     "SELECT id, revision, title, series, series_number, publisher, description,
-     word_count, reading_ease FROM books LEFT JOIN book_stats ON book_id = id";
+     word_count, reading_ease FROM active_books LEFT JOIN book_stats ON book_id = id";
 
 fn read_book(db: &Connection, id: i64) -> Result<Book> {
     let mut book = db
@@ -410,14 +414,14 @@ fn progress_from_row(r: &rusqlite::Row, first: usize) -> rusqlite::Result<Progre
     })
 }
 
-/// One looked-up word as the library stores it.
+/// One looked-up word, with the title of the book it came from. The
+/// title comes from the book row, which stays after the book is removed.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WordRow {
     pub word: String,
     pub device_serial: String,
-    pub book_id: Option<i64>,
-    pub volume_id: String,
-    pub book_title: Option<String>,
+    pub book_id: i64,
+    pub book_title: String,
     pub dict_suffix: Option<String>,
     pub looked_up_at: String,
 }
@@ -460,19 +464,19 @@ impl Library {
     /// serial when given.
     pub fn words(&self, book_id: Option<i64>, device_serial: Option<&str>) -> Result<Vec<WordRow>> {
         let mut stmt = self.db.prepare(
-            "SELECT word, device_serial, book_id, volume_id, book_title, dict_suffix, looked_up_at FROM words
-             WHERE (?1 IS NULL OR book_id = ?1) AND (?2 IS NULL OR device_serial = ?2)
-             ORDER BY looked_up_at DESC, id DESC",
+            "SELECT w.word, w.device_serial, w.book_id, b.title, w.dict_suffix, w.looked_up_at
+             FROM words w JOIN books b ON b.id = w.book_id
+             WHERE (?1 IS NULL OR w.book_id = ?1) AND (?2 IS NULL OR w.device_serial = ?2)
+             ORDER BY w.looked_up_at DESC, w.id DESC",
         )?;
         let rows = stmt.query_map(params![book_id, device_serial], |r| {
             Ok(WordRow {
                 word: r.get(0)?,
                 device_serial: r.get(1)?,
                 book_id: r.get(2)?,
-                volume_id: r.get(3)?,
-                book_title: r.get(4)?,
-                dict_suffix: r.get(5)?,
-                looked_up_at: r.get(6)?,
+                book_title: r.get(3)?,
+                dict_suffix: r.get(4)?,
+                looked_up_at: r.get(5)?,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)

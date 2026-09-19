@@ -198,7 +198,7 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
                     (table::view(open, rows), n)
                 }
                 Pane::Words => {
-                    let rows = words::select(&open.words, &open.books, &open.query.filter.text);
+                    let rows = words::select(&open.words, &open.query.filter.text);
                     let n = rows.len();
                     (words::view(open, rows), n)
                 }
