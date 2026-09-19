@@ -930,6 +930,8 @@ dependencies = [
  "libc",
  "predicates",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
  "toml",
  "zip",

@@ -72,10 +72,12 @@ impl Metadata {
 /// its OPF as `schema:wordCount` and `schema:educationalLevel`. Every
 /// other file gets them measured at import, and the app writes them into
 /// the file in that same form.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Stats {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub word_count: Option<u64>,
     /// The Flesch reading ease score: 0 to 100, higher is easier.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reading_ease: Option<f64>,
 }
 

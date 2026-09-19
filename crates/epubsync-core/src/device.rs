@@ -5,11 +5,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Result;
+use serde::Serialize;
 
 use crate::metadata::Metadata;
 
-/// One thing sync does to the device folder.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One thing sync does to the device folder. As JSON it is one object
+/// with the variant name in `action`, as `{"action": "send_again", ...}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
     /// The book has no file on the device and was never sent.
     Send { id: i64, revision: i64 },
@@ -33,8 +36,10 @@ impl Action {
 }
 
 /// How far the reader is through a book, as the Kobo classes it. The
-/// Kobo stores it as 0, 1, or 2, and so does the library database.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kobo stores it as 0, 1, or 2, and so does the library database. As
+/// JSON it is the lowercase name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ReadStatus {
     Unread,
     Reading,

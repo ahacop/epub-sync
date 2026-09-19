@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use rusqlite_migration::{M, Migrations};
+use serde::Serialize;
 
 use crate::config::Config;
 use crate::device::ReadStatus;
@@ -31,11 +32,15 @@ pub struct Library {
     _lock: File,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// A book as the library holds it. As JSON it is one flat object: the
+/// metadata and the stats fields sit next to `id` and `revision`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Book {
     pub id: i64,
     pub revision: i64,
+    #[serde(flatten)]
     pub metadata: Metadata,
+    #[serde(flatten)]
     pub stats: Stats,
 }
 
@@ -372,7 +377,7 @@ fn insert_authors(tx: &Transaction, id: i64, authors: &[Author]) -> Result<()> {
 }
 
 /// Reading progress on one device for the book it is keyed by.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProgressRow {
     pub device_serial: String,
     pub percent: i64,
@@ -399,7 +404,7 @@ fn progress_from_row(r: &rusqlite::Row, first: usize) -> rusqlite::Result<Progre
 }
 
 /// One looked-up word as the library stores it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WordRow {
     pub word: String,
     pub device_serial: String,

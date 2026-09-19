@@ -39,6 +39,7 @@ epubsync sync                       # make the Kobo's EpubSync folder match the 
 epubsync sync --dry-run             # print the plan and change nothing
 epubsync eject                      # unmount the Kobo and end the USB session
 epubsync words                      # words looked up on the Kobo, newest first
+epubsync list --json                # the same data as JSON, for a script
 ```
 
 The library is one folder. It holds every book as `<id>.kepub.epub` and the
@@ -58,6 +59,18 @@ columns use.
 
 `edit` flags: `--title`, `--publisher`, `--description`, `--author "Name|Sort"`
 (repeat for several authors), `--series`, and `--series-number`.
+
+`--json` on `list`, `show`, `words`, and `sync --dry-run` prints the same
+data as JSON, so a script can read it without splitting the text lines.
+`list` prints an array of books and `show` prints one book. A book is one
+flat object: `id`, `revision`, `title`, `authors` with a name and a sort
+name each, `series` with a name and a number, `publisher`, `description`,
+`word_count`, `reading_ease`, `file`, and `progress` with one entry per
+device. A field the book does not have is left out. `words` prints an
+array of words, newest first, each with the word, the device serial, the
+book id and title, and the time it was looked up. `sync --dry-run --json`
+prints the device, the write gate, and the actions, each with its book
+title.
 
 ## Viewer
 

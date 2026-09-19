@@ -16,6 +16,7 @@ use epubsync_core::metadata::{Author, Metadata, Series, format_series_number};
 use epubsync_core::query::{Filter, Query, Sort, SortKey};
 use epubsync_core::sort_name::sort_name;
 use epubsync_core::sync::{self as core_sync, Gate};
+use serde::Serialize;
 
 #[derive(Parser)]
 #[command(
@@ -73,9 +74,17 @@ enum Command {
         /// Reverse the order
         #[arg(long)]
         reverse: bool,
+        /// Print the books as a JSON array
+        #[arg(long)]
+        json: bool,
     },
     /// Print one book's whole record, its stats, its file path, and its progress per device
-    Show { book: i64 },
+    Show {
+        book: i64,
+        /// Print the book as a JSON object
+        #[arg(long)]
+        json: bool,
+    },
     /// Edit a book's metadata in $EDITOR, or one field per flag
     Edit {
         book: i64,
@@ -114,6 +123,9 @@ enum Command {
         /// Run the deletes without asking
         #[arg(long, short = 'y')]
         yes: bool,
+        /// Print the plan as a JSON object. Needs --dry-run
+        #[arg(long, requires = "dry_run")]
+        json: bool,
     },
     /// Unmount the Kobo and tell it the USB session is over
     Eject {
@@ -128,6 +140,9 @@ enum Command {
         /// A device serial
         #[arg(long)]
         device: Option<String>,
+        /// Print the words as a JSON array
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -199,6 +214,7 @@ fn run(command: Command) -> Result<()> {
             unread,
             sort,
             reverse,
+            json,
         } => {
             let status = if reading {
                 Some(ReadStatus::Reading)
@@ -222,9 +238,9 @@ fn run(command: Command) -> Result<()> {
                     descending: reverse,
                 },
             };
-            list(&config, &query)
+            list(&config, &query, json)
         }
-        Command::Show { book } => show(&config, book),
+        Command::Show { book, json } => show(&config, book, json),
         Command::Edit {
             book,
             title,
@@ -250,6 +266,7 @@ fn run(command: Command) -> Result<()> {
             device,
             allow_newer_firmware,
             yes,
+            json,
         } => sync(
             &config,
             SyncFlags {
@@ -257,9 +274,10 @@ fn run(command: Command) -> Result<()> {
                 device,
                 allow_newer_firmware,
                 yes,
+                json,
             },
         ),
-        Command::Words { book, device } => words(&config, book, device.as_deref()),
+        Command::Words { book, device, json } => words(&config, book, device.as_deref(), json),
         Command::Eject { device } => {
             let kobo = find_kobo(device.as_deref())?;
             eject(&kobo)
@@ -311,11 +329,42 @@ fn import(config: &Config, path: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn list(config: &Config, query: &Query) -> Result<()> {
+/// One book as `--json` prints it: the flat record, the file path, and
+/// the progress per device. `list` prints an array of these and `show`
+/// prints one.
+#[derive(Serialize)]
+struct BookJson<'a> {
+    #[serde(flatten)]
+    book: &'a Book,
+    file: PathBuf,
+    progress: &'a [ProgressRow],
+}
+
+/// Prints a value as indented JSON with a newline at the end.
+fn print_json<T: Serialize>(value: &T) -> Result<()> {
+    let mut out = std::io::stdout().lock();
+    serde_json::to_writer_pretty(&mut out, value)?;
+    out.write_all(b"\n")?;
+    Ok(())
+}
+
+fn list(config: &Config, query: &Query, json: bool) -> Result<()> {
     let lib = Library::open(config)?;
     let books = lib.list()?;
     let progress = lib.progress()?;
-    for book in query.select(&books, &progress) {
+    let shown = query.select(&books, &progress);
+    if json {
+        let rows: Vec<BookJson> = shown
+            .iter()
+            .map(|book| BookJson {
+                book,
+                file: lib.book_path(book.id),
+                progress: progress.get(&book.id).map_or(&[], Vec::as_slice),
+            })
+            .collect();
+        return print_json(&rows);
+    }
+    for book in shown {
         let mut line = book_line(book);
         for p in progress.get(&book.id).into_iter().flatten() {
             line.push_str(&format!("  {}", progress_cell(p)));
@@ -327,10 +376,17 @@ fn list(config: &Config, query: &Query) -> Result<()> {
 
 /// One label and value per line, then the description as Markdown after a
 /// blank line. A field the book does not have gets no line.
-fn show(config: &Config, id: i64) -> Result<()> {
+fn show(config: &Config, id: i64, json: bool) -> Result<()> {
     let lib = Library::open(config)?;
     let book = lib.get(id)?;
     let progress = lib.book_progress(id)?;
+    if json {
+        return print_json(&BookJson {
+            book: &book,
+            file: lib.book_path(id),
+            progress: &progress,
+        });
+    }
     let m = &book.metadata;
 
     let mut lines = vec![("Id", book.id.to_string()), ("Title", m.title.clone())];
@@ -385,9 +441,13 @@ fn progress_cell(p: &ProgressRow) -> String {
         .to_string()
 }
 
-fn words(config: &Config, book: Option<i64>, device: Option<&str>) -> Result<()> {
+fn words(config: &Config, book: Option<i64>, device: Option<&str>, json: bool) -> Result<()> {
     let lib = Library::open(config)?;
-    for w in lib.words(book, device)? {
+    let words = lib.words(book, device)?;
+    if json {
+        return print_json(&words);
+    }
+    for w in words {
         let title = w.book_title.as_deref().unwrap_or("");
         let book = w
             .book_id
@@ -567,6 +627,72 @@ struct SyncFlags {
     device: Option<PathBuf>,
     allow_newer_firmware: bool,
     yes: bool,
+    /// Print the plan as JSON. Clap makes it require `dry_run`.
+    json: bool,
+}
+
+/// The plan as `sync --dry-run --json` prints it.
+#[derive(Serialize)]
+struct PlanJson<'a> {
+    device: DeviceJson<'a>,
+    /// Why the device refuses row writes, or null when it accepts them.
+    write_gate: Option<&'a str>,
+    /// The actions sync would run.
+    actions: Vec<ActionJson<'a>>,
+    /// The replacements sync holds back while the write gate is closed.
+    skipped: Vec<ActionJson<'a>>,
+}
+
+#[derive(Serialize)]
+struct DeviceJson<'a> {
+    serial: &'a str,
+    root: &'a Path,
+    db_version: Option<i64>,
+}
+
+/// One action with its book's title. A delete has no title: the book is
+/// no longer in the library.
+#[derive(Serialize)]
+struct ActionJson<'a> {
+    #[serde(flatten)]
+    action: &'a Action,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+}
+
+fn action_json<'a>(lib: &Library, action: &'a Action) -> Result<ActionJson<'a>> {
+    let title = match action {
+        Action::Delete { .. } => None,
+        _ => Some(lib.get(action.id())?.metadata.title),
+    };
+    Ok(ActionJson { action, title })
+}
+
+fn plan_json<'a>(lib: &Library, kobo: &'a Kobo, gate: &'a Gate) -> Result<PlanJson<'a>> {
+    let (write_gate, actions, skipped) = match gate {
+        Gate::Open(actions) => (None, actions, &[][..]),
+        Gate::Closed {
+            kept,
+            skipped,
+            reason,
+        } => (Some(reason.as_str()), kept, skipped.as_slice()),
+    };
+    Ok(PlanJson {
+        device: DeviceJson {
+            serial: kobo.serial(),
+            root: &kobo.root,
+            db_version: kobo.db_version(),
+        },
+        write_gate,
+        actions: actions
+            .iter()
+            .map(|a| action_json(lib, a))
+            .collect::<Result<_>>()?,
+        skipped: skipped
+            .iter()
+            .map(|a| action_json(lib, a))
+            .collect::<Result<_>>()?,
+    })
 }
 
 fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
@@ -589,13 +715,20 @@ fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
             }
         }
     };
-    println!("Kobo {} at {}", kobo.serial(), kobo.root.display());
+    if !flags.json {
+        println!("Kobo {} at {}", kobo.serial(), kobo.root.display());
+    }
     kobo.open_db(flags.allow_newer_firmware)?;
-    if let Some(v) = kobo.db_version() {
+    if let Some(v) = kobo.db_version()
+        && !flags.json
+    {
         println!("Kobo database version {v}");
     }
 
     let mut gate = core_sync::gate(core_sync::plan(&lib, &kobo)?, &kobo);
+    if flags.json {
+        return print_json(&plan_json(&lib, &kobo, &gate)?);
+    }
     match &gate {
         Gate::Open(actions) => {
             if actions.is_empty() {

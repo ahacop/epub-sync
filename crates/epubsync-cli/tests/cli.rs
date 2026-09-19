@@ -71,6 +71,14 @@ impl Env {
     }
 }
 
+/// Runs a command that must succeed and parses its stdout as JSON.
+fn json_output(cmd: &mut Command) -> serde_json::Value {
+    let out = cmd.assert().success().get_output().stdout.clone();
+    serde_json::from_slice(&out).unwrap_or_else(|e| {
+        panic!("{e}:\n{}", String::from_utf8_lossy(&out));
+    })
+}
+
 #[test]
 fn every_command_but_init_needs_the_config() {
     let env = Env::new();
@@ -232,6 +240,33 @@ fn syncs_to_a_folder_that_looks_like_a_kobo() {
         .stdout(predicate::str::contains("eject").not());
     assert!(!kobo.join("EpubSync/1.kepub.epub").exists());
 
+    let plan = json_output(env.cmd().args([
+        "sync",
+        "--device",
+        kobo.to_str().unwrap(),
+        "--dry-run",
+        "--json",
+    ]));
+    assert_eq!(
+        plan,
+        serde_json::json!({
+            "device": {"serial": "N4181A", "root": kobo.to_str().unwrap(), "db_version": null},
+            "write_gate": null,
+            "actions": [
+                {"action": "send", "id": 1, "revision": 1, "title": "The Left Hand of Darkness"},
+                {"action": "delete", "id": 42},
+            ],
+            "skipped": [],
+        })
+    );
+    assert!(!kobo.join("EpubSync/1.kepub.epub").exists());
+
+    env.cmd()
+        .args(["sync", "--device", kobo.to_str().unwrap(), "--json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--dry-run"));
+
     env.cmd()
         .args(["sync", "--device", kobo.to_str().unwrap()])
         .assert()
@@ -314,6 +349,28 @@ fn shows_one_book() {
         assert!(out.contains(line), "{line:?} not in:\n{out}");
     }
 
+    let mut book = json_output(env.cmd().args(["show", "1", "--json"]));
+    // The score depends on the scorer, so the test checks only that it is a number.
+    let ease = book.as_object_mut().unwrap().remove("reading_ease");
+    assert!(ease.as_ref().is_some_and(|e| e.is_number()), "{ease:?}");
+    assert_eq!(
+        book,
+        serde_json::json!({
+            "id": 1,
+            "revision": 1,
+            "title": "The Left Hand of Darkness",
+            "authors": [{"name": "Ursula K. Le Guin", "sort": "Le Guin, Ursula K."}],
+            "series": {"name": "Hainish Cycle", "number": 4.0},
+            "publisher": "Ace",
+            "description": "<p>A <em>human</em> envoy.</p>",
+            "word_count": 1,
+            "file": file.to_str().unwrap(),
+            "progress": [
+                {"device_serial": "N1", "percent": 37, "status": "reading", "last_read": "2026-09-01T10:00:00Z"},
+            ],
+        })
+    );
+
     env.cmd()
         .args(["show", "2"])
         .assert()
@@ -347,6 +404,57 @@ fn lists_progress_and_words() {
 
     env.cmd().arg("list").assert().success().stdout(
         "    1  The Left Hand of Darkness  by Ursula K. Le Guin  [Hainish Cycle #4]  N1: 37% reading 2026-09-01  N2: 100% finished 2026-08-01\n",
+    );
+
+    // The same data as JSON: one flat object per book, with the fields a
+    // book does not have left out and the progress rows in device order.
+    let mut books = json_output(env.cmd().args(["list", "--json"]));
+    let book = &mut books[0];
+    assert!(
+        book.as_object_mut()
+            .unwrap()
+            .remove("reading_ease")
+            .is_some()
+    );
+    assert_eq!(
+        books,
+        serde_json::json!([{
+            "id": 1,
+            "revision": 1,
+            "title": "The Left Hand of Darkness",
+            "authors": [{"name": "Ursula K. Le Guin", "sort": "Le Guin, Ursula K."}],
+            "series": {"name": "Hainish Cycle", "number": 4.0},
+            "word_count": 1,
+            "file": env.dir.path().join("library/1.kepub.epub").to_str().unwrap(),
+            "progress": [
+                {"device_serial": "N1", "percent": 37, "status": "reading", "last_read": "2026-09-01T10:00:00Z"},
+                {"device_serial": "N2", "percent": 100, "status": "finished", "last_read": "2026-08-01T10:00:00Z"},
+            ],
+        }])
+    );
+    assert_eq!(
+        json_output(env.cmd().args(["list", "--json", "tolkien"])),
+        serde_json::json!([])
+    );
+
+    let words = json_output(env.cmd().args(["words", "--json"]));
+    assert_eq!(
+        words,
+        serde_json::json!([
+            {"word": "serendipity", "device_serial": "N2", "book_id": null, "volume_id": "store-volume",
+             "book_title": "A Store Book", "dict_suffix": "-en", "looked_up_at": "2026-09-03T10:00:00Z"},
+            {"word": "kemmer", "device_serial": "N1", "book_id": 1, "volume_id": "file:///mnt/onboard/EpubSync/1.kepub.epub",
+             "book_title": "The Left Hand of Darkness", "dict_suffix": "-en", "looked_up_at": "2026-09-02T09:00:00Z"},
+            {"word": "ansible", "device_serial": "N1", "book_id": 1, "volume_id": "file:///mnt/onboard/EpubSync/1.kepub.epub",
+             "book_title": "The Left Hand of Darkness", "dict_suffix": "-en", "looked_up_at": "2026-09-02T08:00:00Z"},
+        ])
+    );
+    assert_eq!(
+        json_output(env.cmd().args(["words", "--json", "--device", "N2"]))
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
 
     let out = env
