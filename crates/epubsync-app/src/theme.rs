@@ -272,7 +272,7 @@ pub fn close(theme: &Theme, status: button::Status) -> button::Style {
 
 /// A toolbar button such as Reload: a `surface` box with a `line_strong`
 /// border, the same shape as the filter field, that sits on `surface_2`
-/// under the pointer.
+/// under the pointer. The label reads in `faint` while the button is off.
 pub fn action(theme: &Theme, status: button::Status) -> button::Style {
     let c = colors(theme);
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
@@ -282,7 +282,11 @@ pub fn action(theme: &Theme, status: button::Status) -> button::Style {
         } else {
             c.surface
         })),
-        text_color: c.ink,
+        text_color: if matches!(status, button::Status::Disabled) {
+            c.faint
+        } else {
+            c.ink
+        },
         border: Border {
             color: c.line_strong,
             width: 1.0,

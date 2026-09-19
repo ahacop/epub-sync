@@ -1,26 +1,30 @@
 //! The library viewer: a window with a table of books and, when a book is
 //! selected, its details in a sidebar on the right. A Words tab swaps the
-//! table for the list of words looked up on a device. It reads the
-//! library and never writes it. The CLI imports, edits, removes, and
-//! syncs. A Reload button reads the library again.
+//! table for the list of words looked up on a device. A Reload button
+//! reads the library again, and an Import button or a drop of files onto
+//! the window adds books. The CLI edits, removes, and syncs.
 
 mod description;
 mod detail;
 mod format;
+mod import;
 mod table;
 mod theme;
 mod words;
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use epubsync_core::config;
 use epubsync_core::device::ReadStatus;
 use epubsync_core::library::{Book, Library, ProgressRow, WordRow};
 use epubsync_core::query::{self, Query, Sort, SortKey};
+use iced::event::{self, Event, Status};
 use iced::keyboard::{self, key};
 use iced::widget::{button, column, container, markdown, row, space, text, text_input};
-use iced::{Center, Element, Fill, Subscription, Task, padding};
+use iced::{Center, Element, Fill, Subscription, Task, padding, window};
 
+use crate::import::{Handoff, Import, Line};
 use crate::theme::{BODY, MONO, SANS_SEMIBOLD};
 
 /// The state of the viewer window: what it draws.
@@ -35,8 +39,11 @@ enum Viewer {
 
 struct Open {
     /// The open library. It holds the lock for the life of the window,
-    /// so a CLI command fails while the window shows the library.
-    library: Library,
+    /// so a CLI command fails while the window shows the library. It is
+    /// None while the import task has it.
+    library: Option<Library>,
+    /// The library folder. The status bar and the sidebar footer show it.
+    folder: PathBuf,
     /// The books in id order. The table sorts a borrowed view.
     books: Vec<Book>,
     /// Reading progress by book id, one row per device.
@@ -58,6 +65,10 @@ struct Open {
     /// Why the last reload failed, if it did. The status bar shows it
     /// until a reload succeeds.
     error: Option<String>,
+    /// The import under way or last done, until the × clears it.
+    import: Option<Import>,
+    /// Whether files are held over the window in a drag.
+    hovering: bool,
 }
 
 /// The pane in the main area: the table of books, or the list of words.
@@ -91,6 +102,18 @@ enum Message {
     Scrolled(f32),
     /// The Reload button. The viewer reads the library again.
     Reload,
+    /// The Import button. The viewer opens the file picker.
+    Pick,
+    /// The file picker closed with these paths, none on a cancel.
+    Picked(Vec<PathBuf>),
+    /// Files are held over the window, or the drag left it.
+    Hovering(bool),
+    /// A file was dropped onto the window.
+    Dropped(PathBuf),
+    /// The import task finished one file and hands the library back.
+    Imported(Handoff, Line),
+    /// The × on the import strip.
+    ClearImport,
     /// A click on a link in the description. It does nothing.
     LinkClicked,
 }
@@ -109,14 +132,18 @@ fn main() -> iced::Result {
         .run()
 }
 
-/// Escape closes the sidebar. The filter field takes Escape first while
-/// it has focus, to drop the focus.
+/// Escape closes the sidebar, and a file drag or drop on the window
+/// starts an import. The filter field takes Escape first while it has
+/// focus, to drop the focus, so only an ignored Escape counts.
 fn subscription(_viewer: &Viewer) -> Subscription<Message> {
-    keyboard::listen().filter_map(|event| match event {
-        keyboard::Event::KeyPressed {
+    event::listen_with(|event, status, _window| match event {
+        Event::Keyboard(keyboard::Event::KeyPressed {
             key: keyboard::Key::Named(key::Named::Escape),
             ..
-        } => Some(Message::Close),
+        }) if status == Status::Ignored => Some(Message::Close),
+        Event::Window(window::Event::FileHovered(_)) => Some(Message::Hovering(true)),
+        Event::Window(window::Event::FilesHoveredLeft) => Some(Message::Hovering(false)),
+        Event::Window(window::Event::FileDropped(path)) => Some(Message::Dropped(path)),
         _ => None,
     })
 }
@@ -140,7 +167,8 @@ impl Open {
     /// words read once.
     fn new(library: Library) -> anyhow::Result<Open> {
         let mut open = Open {
-            library,
+            folder: library.folder.clone(),
+            library: Some(library),
             books: Vec::new(),
             progress: BTreeMap::new(),
             words: Vec::new(),
@@ -149,6 +177,8 @@ impl Open {
             scroll: 0.0,
             selected: None,
             error: None,
+            import: None,
+            hovering: false,
         };
         open.read()?;
         Ok(open)
@@ -157,9 +187,12 @@ impl Open {
     /// Reads the books, the progress, and the words from the library.
     /// The state changes only when all three reads succeed.
     fn read(&mut self) -> anyhow::Result<()> {
-        let books = self.library.list()?;
-        let progress = self.library.progress()?;
-        let words = self.library.words(None, None)?;
+        let Some(library) = &self.library else {
+            anyhow::bail!("the import task holds the library");
+        };
+        let books = library.list()?;
+        let progress = library.progress()?;
+        let words = library.words(None, None)?;
         self.books = books;
         self.progress = progress;
         self.words = words;
@@ -193,6 +226,20 @@ impl Open {
                 description: description::parse(html),
             }
         });
+    }
+
+    /// Queues paths for import and starts the task if it is idle. Paths
+    /// that arrive while an import runs join its queue. Paths that
+    /// arrive after one ended start a new strip in place of the old.
+    fn import(&mut self, paths: &[PathBuf]) -> Task<Message> {
+        let import = match &mut self.import {
+            Some(import) if import.running() => import,
+            _ => self.import.insert(Import::default()),
+        };
+        for path in paths {
+            import.add(path);
+        }
+        import.start(&mut self.library)
     }
 }
 
@@ -228,6 +275,26 @@ fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
         }
         Message::Scrolled(offset) => open.scroll = offset,
         Message::Reload => open.reload(),
+        Message::Pick => return import::pick(),
+        // A cancelled picker gives no paths and shows nothing.
+        Message::Picked(paths) if !paths.is_empty() => return open.import(&paths),
+        Message::Picked(_) => {}
+        Message::Hovering(hovering) => open.hovering = hovering,
+        Message::Dropped(path) => {
+            open.hovering = false;
+            return open.import(&[path]);
+        }
+        Message::Imported(handoff, line) => {
+            open.library = handoff.take();
+            if let Some(import) = &mut open.import {
+                import.finish(line);
+            }
+            open.reload();
+            if let Some(import) = &mut open.import {
+                return import.start(&mut open.library);
+            }
+        }
+        Message::ClearImport => open.import = None,
         Message::LinkClicked => {}
     }
     Task::none()
@@ -257,7 +324,18 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
             if let Some((book, selected)) = shown {
                 main = main.push(detail::view(open, book, selected));
             }
-            column![toolbar(open, shown_count), main, status_bar(open)].into()
+            // The import strip sits under the toolbar. A drag over the
+            // window shows the drop hint there while no import is shown.
+            let strip = match &open.import {
+                Some(import) => Some(import::view(import)),
+                None if open.hovering => Some(import::drop_hint()),
+                None => None,
+            };
+            column![toolbar(open, shown_count)]
+                .extend(strip)
+                .push(main)
+                .push(status_bar(open))
+                .into()
         }
     }
 }
@@ -272,8 +350,9 @@ fn count(n: usize, noun: &str) -> String {
 }
 
 /// The toolbar: the Library and Words tabs, the count for the pane in
-/// view, the filter field, and the Reload button. The count reads
-/// "4 of 23 books" while the filter is set.
+/// view, the filter field, and the Import and Reload buttons. The count
+/// reads "4 of 23 books" while the filter is set. Reload is off while
+/// the import task holds the library.
 fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
     let (total, noun, placeholder) = match open.pane {
         Pane::Books => (
@@ -300,17 +379,20 @@ fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
         .size(13)
         .padding([5, 10])
         .style(theme::filter);
-    let reload = button(text("Reload").size(13))
-        .on_press(Message::Reload)
-        .padding([5, 10])
-        .style(theme::action);
+    let action = |label: &'static str, message: Option<Message>| {
+        button(text(label).size(13))
+            .on_press_maybe(message)
+            .padding([5, 10])
+            .style(theme::action)
+    };
     let bar = row![
         tab("Library", Pane::Books),
         tab("Words", Pane::Words),
         text(count).size(BODY).style(theme::text_color(|c| c.muted)),
         space().width(Fill),
         filter,
-        reload,
+        action("Import…", Some(Message::Pick)),
+        action("Reload", open.library.is_some().then_some(Message::Reload)),
     ]
     .spacing(14)
     .align_y(Center)
@@ -354,7 +436,7 @@ fn status_bar(open: &Open) -> Element<'_, Message> {
             .style(theme::text_color(|c| c.muted)),
         counts,
         space().width(Fill),
-        text(open.library.folder.display().to_string())
+        text(open.folder.display().to_string())
             .font(MONO)
             .size(11)
             .wrapping(text::Wrapping::None)

@@ -43,8 +43,8 @@ The workspace has four crates in one dependency direction:
 - `epubsync-core` holds the library, the device layer, the sync, the Kobo
   device, the config, and the kepubify FFI.
 - `epubsync-cli` (binary `epubsync`) and `epubsync-app` (binary
-  `epubsync-app`) sit on top of core. The viewer is read-only. Every
-  write goes through the CLI.
+  `epubsync-app`) sit on top of core. The viewer imports books; every
+  other write goes through the CLI.
 
 ### epubsync-epub
 
@@ -112,11 +112,16 @@ use `assert_cmd` against the built binary with a temp library.
 
 ### epubsync-app
 
-An Iced 0.14 window. The state is the `Viewer` enum in `main.rs`, and it
-holds only what the panes draw. The window follows the system light or dark
-mode: `theme.rs` style functions read `is_dark` from the theme at draw
-time, so no view function knows the mode. The fonts are embedded from
-`fonts/`.
+An Iced 0.14 window. The state is the `Viewer` enum in `main.rs`. It
+holds the open `Library`, what the panes draw, and the import under way.
+The window follows the system light or dark mode: `theme.rs` style
+functions read `is_dark` from the theme at draw time, so no view function
+knows the mode. The fonts are embedded from `fonts/`.
+
+`import.rs` runs `Library::import` per file on a background task. Iced
+messages must be `Clone`, so the task takes the `Library` value and hands
+it back inside `Handoff`, and the state holds `None` in between. Reload is
+off while the library is away. A write from the viewer ends with a reload.
 
 ## Versions and releases
 

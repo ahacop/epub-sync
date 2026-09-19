@@ -15,3 +15,8 @@ anyhow = "1.0.104"
 epubsync-core = { path = "../epubsync-core" }
 htmd = "0.5.5"
 iced = { version = "0.14.0", features = ["markdown"] }
+rfd = "0.17.2"
+
+[dev-dependencies]
+tempfile = "3"
+epubsync-epub = { path = "../epubsync-epub", features = ["fixtures"] }

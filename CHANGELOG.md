@@ -28,6 +28,15 @@ books, the progress, and the words again and keeps the sort, the filter,
 and the sidebar. The `Library` value now lives in the viewer state, which
 is what the writes from the viewer will need.
 
+The viewer imports books. An Import button opens the system file picker
+on EPUB files, and files dropped onto the window import too, as does a
+folder, one level deep as with `epubsync import`. Each file goes through
+the same import as the CLI on a background task, so the window stays
+live while kepubify runs, and its row lands in the table as it finishes.
+A strip under the toolbar counts the files as they go and then lists
+every file that was skipped or failed. A skipped file is one whose title
+and first author are already in the library.
+
 ## 0.1.8 (2026-09-17)
 
 A sync from macOS no longer leaves a `._` file next to each book it sends.

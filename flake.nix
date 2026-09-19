@@ -9,11 +9,13 @@
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      # The libraries an Iced window loads at run time on Linux. The
-      # binary opens them with dlopen, so they are not linked at build
-      # time and must be on its rpath or on LD_LIBRARY_PATH.
-      windowLibs = pkgs: with pkgs; [ libxkbcommon vulkan-loader wayland libX11 libXcursor libXi libxcb ];
-      windowLibPath = pkgs: pkgs.lib.makeLibraryPath (with pkgs; [ wayland vulkan-loader libxkbcommon ]);
+      # The libraries the viewer loads at run time on Linux: the ones an
+      # Iced window opens, and libdbus, which rfd opens to reach the desktop
+      # portal for the file picker. The binary opens them with dlopen, so
+      # they are not linked at build time and must be on its rpath or on
+      # LD_LIBRARY_PATH.
+      windowLibs = pkgs: with pkgs; [ libxkbcommon vulkan-loader wayland libX11 libXcursor libXi libxcb dbus ];
+      windowLibPath = pkgs: pkgs.lib.makeLibraryPath (with pkgs; [ wayland vulkan-loader libxkbcommon dbus ]);
     in
     {
       packages = forAll (pkgs:
