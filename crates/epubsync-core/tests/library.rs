@@ -28,6 +28,16 @@ fn setup() -> Setup {
     }
 }
 
+/// The names of the `.tmp` files in a folder. An import that has ended
+/// leaves none.
+fn temp_files(folder: &Path) -> Vec<String> {
+    std::fs::read_dir(folder)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect()
+}
+
 /// The first author's sort name as the file gives it, `None` when the
 /// file gives none.
 fn file_sort(path: &Path) -> Option<String> {
@@ -83,7 +93,7 @@ fn imports_an_epub_and_writes_the_made_sort_name() {
     let path = lib.book_path(id);
     assert_eq!(path.file_name().unwrap(), "1.kepub.epub");
     assert!(path.exists());
-    assert!(!lib.folder.join("import.tmp").exists());
+    assert!(temp_files(&lib.folder).is_empty());
     assert!(common::read_entry(&path, "OEBPS/chapter1.xhtml").contains("koboSpan"));
     assert_eq!(file_sort(&path).as_deref(), Some("Voltaire"));
 
@@ -299,7 +309,20 @@ fn a_failed_conversion_leaves_no_row_and_no_temp_file() {
     let err = lib.import(&source, false).unwrap_err();
     assert!(err.to_string().contains("convert"), "{err}");
     assert!(lib.list().unwrap().is_empty());
-    assert!(!lib.folder.join("import.tmp").exists());
+    assert!(temp_files(&lib.folder).is_empty());
+}
+
+#[test]
+fn a_failure_after_the_conversion_leaves_no_temp_file() {
+    let s = setup();
+    let mut lib = Library::open(&s.config).unwrap();
+    // A folder at the book's path makes the rename of the converted
+    // file fail, after the conversion and the row insert.
+    std::fs::create_dir(lib.book_path(1)).unwrap();
+    let source = common::write_epub(&s.root, "lhod.epub", common::EPUB2_OPF);
+    let err = lib.import(&source, false).unwrap_err();
+    assert!(err.to_string().contains("rename"), "{err}");
+    assert!(temp_files(&lib.folder).is_empty());
 }
 
 #[test]

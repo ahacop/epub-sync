@@ -25,7 +25,6 @@ const DELETED_BOOKS_SQL: &str = include_str!("migrations/3-deleted-books.sql");
 const PROGRESS_HISTORY_SQL: &str = include_str!("migrations/4-progress-history.sql");
 const DB_NAME: &str = "library.sqlite";
 const LOCK_NAME: &str = "lock";
-const IMPORT_TEMP: &str = "import.tmp";
 
 pub struct Library {
     pub folder: PathBuf,
@@ -162,27 +161,31 @@ impl Library {
             return Ok(ImportOutcome::Exists { id });
         }
 
-        // 4: convert or copy into a temp file in the library folder.
-        let temp = self.folder.join(IMPORT_TEMP);
+        // 4: convert or copy into a temp file in the library folder. The
+        // file is removed with the value when a later step fails, so an
+        // import that returns an error leaves nothing in the folder.
+        let temp = tempfile::Builder::new()
+            .prefix("import-")
+            .suffix(".tmp")
+            .tempfile_in(&self.folder)
+            .context("create a temp file in the library")?;
         let is_kepub = source
             .file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|n| n.ends_with(".kepub.epub") || n.ends_with(".kepub"));
-        let result = if is_kepub {
-            std::fs::copy(source, &temp)
-                .map(|_| ())
-                .with_context(|| format!("copy {}", source.display()))
+        if is_kepub {
+            std::fs::copy(source, temp.path())
+                .with_context(|| format!("copy {}", source.display()))?;
         } else {
-            kepub::convert(source, &temp).with_context(|| format!("convert {}", source.display()))
-        };
-        if let Err(e) = result {
-            let _ = std::fs::remove_file(&temp);
-            return Err(e);
+            kepub::convert(source, temp.path())
+                .with_context(|| format!("convert {}", source.display()))?;
         }
 
         // 5: insert the row and rename the file to its id.
         let id = self.insert(&record, &stats)?;
-        std::fs::rename(&temp, self.book_path(id)).context("rename the imported file")?;
+        temp.persist(self.book_path(id))
+            .map_err(|e| e.error)
+            .context("rename the imported file")?;
 
         // 6: write made sort names and measured numbers into the converted
         // file.

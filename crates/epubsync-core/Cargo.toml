@@ -16,12 +16,12 @@ readsight = "1.0.2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rusqlite_migration = "2.6.0"
 serde = { version = "1.0.229", features = ["derive"] }
+tempfile = "3.27.0"
 toml = "1.1.6"
 unicode-normalization = "0.1.25"
 
 [dev-dependencies]
 epubsync-epub = { path = "../epubsync-epub", features = ["fixtures"] }
-tempfile = "3.27.0"
 toml = "1.1.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]

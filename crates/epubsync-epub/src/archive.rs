@@ -14,16 +14,21 @@ use zip::write::SimpleFileOptions;
 
 /// Writes `new_opf` in place of the entry at `opf_path` inside the EPUB at
 /// `path`. The new zip is built in a temp file next to the original and
-/// renamed over it. `mimetype` stays first and stored because it is copied
-/// raw in its original position.
+/// renamed over it, so the original is whole until the new zip is
+/// complete, and a rewrite that fails removes the temp file when it
+/// returns. `mimetype` stays first and stored because it is copied raw
+/// in its original position.
 pub fn rewrite(path: &Path, opf_path: &str, new_opf: &str) -> Result<()> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut archive = zip::ZipArchive::new(BufReader::new(file))
         .with_context(|| format!("read {}", path.display()))?;
 
-    let temp_path = path.with_extension("tmp");
-    let temp =
-        File::create(&temp_path).with_context(|| format!("create {}", temp_path.display()))?;
+    let folder = path.parent().unwrap_or(Path::new("."));
+    let temp = tempfile::Builder::new()
+        .prefix(".epubsync-")
+        .suffix(".tmp")
+        .tempfile_in(folder)
+        .with_context(|| format!("create a temp file in {}", folder.display()))?;
     let mut writer = zip::ZipWriter::new(BufWriter::new(temp));
 
     let mut wrote_opf = false;
@@ -46,8 +51,10 @@ pub fn rewrite(path: &Path, opf_path: &str, new_opf: &str) -> Result<()> {
 
     let mut out = writer.finish()?;
     out.flush()?;
-    out.get_ref().sync_all()?;
-    drop(out);
-    std::fs::rename(&temp_path, path).with_context(|| format!("replace {}", path.display()))?;
+    out.get_ref().as_file().sync_all()?;
+    let temp = out.into_inner().map_err(|e| e.into_error())?;
+    temp.persist(path)
+        .map_err(|e| e.error)
+        .with_context(|| format!("replace {}", path.display()))?;
     Ok(())
 }

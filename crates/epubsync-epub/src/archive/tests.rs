@@ -47,5 +47,27 @@ fn rewrite_keeps_every_other_entry_as_it_was() {
         opf::read(&path).unwrap().title.unwrap().value,
         "The Right Hand of Light"
     );
-    assert!(!dir.path().join("book.tmp").exists());
+    assert_eq!(names(dir.path()), ["book.epub"]);
+}
+
+#[test]
+fn a_rewrite_that_fails_leaves_the_book_and_no_temp_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = common::write_epub(dir.path(), "book.epub", common::EPUB2_OPF);
+    let before = entries(&path);
+
+    let err = rewrite(&path, "OEBPS/missing.opf", "<package/>").unwrap_err();
+    assert!(err.to_string().contains("no OEBPS/missing.opf"), "{err}");
+    assert_eq!(entries(&path), before);
+    assert_eq!(names(dir.path()), ["book.epub"]);
+}
+
+/// The file names in a folder, sorted.
+fn names(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }

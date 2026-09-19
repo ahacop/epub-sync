@@ -37,6 +37,12 @@ A strip under the toolbar counts the files as they go and then lists
 every file that was skipped or failed. A skipped file is one whose title
 and first author are already in the library.
 
+An import that fails after the conversion, and an edit whose zip rewrite
+fails partway, no longer leave a temp file in the library folder. Both
+now build in a temp file that is removed when the step returns an
+error. The import temp file is named `import-<random>.tmp` in place of
+`import.tmp`.
+
 ## 0.1.8 (2026-09-17)
 
 A sync from macOS no longer leaves a `._` file next to each book it sends.
