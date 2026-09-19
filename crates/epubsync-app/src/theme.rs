@@ -9,7 +9,7 @@
 use epubsync_core::device::ReadStatus;
 use iced::font::Weight;
 use iced::widget::{button, container, progress_bar, text, text_input};
-use iced::{Background, Border, Color, Element, Fill, Font, Theme, border};
+use iced::{Background, Border, Color, Element, Fill, Font, Shadow, Theme, Vector, border};
 
 /// The interface typeface.
 pub const SANS: Font = Font::with_name("Instrument Sans");
@@ -76,6 +76,10 @@ pub struct Colors {
     pub finished_tint: Color,
     pub unread: Color,
     pub unread_tint: Color,
+    /// The ground of a button that deletes something, with white text.
+    pub danger: Color,
+    /// The same button under the pointer.
+    pub danger_2: Color,
 }
 
 const fn hex(rgb: u32) -> Color {
@@ -100,6 +104,8 @@ pub const LIGHT: Colors = Colors {
     finished_tint: hex(0xDFF0E4),
     unread: hex(0x8A918E),
     unread_tint: hex(0xECEEED),
+    danger: hex(0xB42318),
+    danger_2: hex(0x9A1D12),
 };
 
 pub const DARK: Colors = Colors {
@@ -120,6 +126,8 @@ pub const DARK: Colors = Colors {
     finished_tint: hex(0x1B3426),
     unread: hex(0x7D8683),
     unread_tint: hex(0x2A2F30),
+    danger: hex(0xD64545),
+    danger_2: hex(0xE25C5C),
 };
 
 /// The color set for the theme Iced picked from the system.
@@ -329,5 +337,61 @@ pub fn filter(theme: &Theme, status: text_input::Status) -> text_input::Style {
         placeholder: c.faint,
         value: c.ink,
         selection: c.accent_tint,
+    }
+}
+
+/// A button that deletes something, such as Remove in the remove dialog:
+/// white text on `danger`, and on `danger_2` under the pointer. The
+/// label reads in `faint` on `surface_2` while the button is off.
+pub fn danger(theme: &Theme, status: button::Status) -> button::Style {
+    let c = colors(theme);
+    let (ground, ink) = match status {
+        button::Status::Disabled => (c.surface_2, c.faint),
+        button::Status::Hovered | button::Status::Pressed => (c.danger_2, Color::WHITE),
+        button::Status::Active => (c.danger, Color::WHITE),
+    };
+    button::Style {
+        background: Some(Background::Color(ground)),
+        text_color: ink,
+        border: border::rounded(6),
+        ..button::Style::default()
+    }
+}
+
+/// The layer between the window and a dialog: black at half strength,
+/// so the window shows through dimmed.
+pub fn scrim(theme: &Theme) -> container::Style {
+    let a = if theme.extended_palette().is_dark {
+        0.6
+    } else {
+        0.45
+    };
+    container::Style {
+        background: Some(Background::Color(Color { a, ..Color::BLACK })),
+        ..container::Style::default()
+    }
+}
+
+/// A dialog box: a `surface` panel with a `line_strong` border, rounded
+/// corners, and a soft shadow.
+pub fn dialog(theme: &Theme) -> container::Style {
+    let c = colors(theme);
+    container::Style {
+        background: Some(Background::Color(c.surface)),
+        text_color: Some(c.ink),
+        border: Border {
+            color: c.line_strong,
+            width: 1.0,
+            radius: 10.0.into(),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.3,
+                ..Color::BLACK
+            },
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 28.0,
+        },
+        ..container::Style::default()
     }
 }

@@ -3,14 +3,16 @@
 //! table for the list of words looked up on a device. A Reload button
 //! reads the library again, and an Import button or a drop of files onto
 //! the window adds books, with a strip under the toolbar that shows the
-//! progress and gives the table the added books. The file path, the
+//! progress and gives the table the added books. A Remove… button in the
+//! sidebar removes the selected book after a dialog. The file path, the
 //! folder path, and the links in a description open in the system file
-//! manager or the browser. The CLI edits, removes, and syncs.
+//! manager or the browser. The CLI edits and syncs.
 
 mod description;
 mod detail;
 mod format;
 mod import;
+mod remove;
 mod table;
 mod theme;
 mod words;
@@ -65,8 +67,10 @@ struct Open {
     scroll: f32,
     /// The book in the sidebar, if any.
     selected: Option<Selected>,
-    /// The last reload or open that failed, as one sentence. The status
-    /// bar shows it until a reload succeeds.
+    /// The book the remove dialog asks about, while the dialog is shown.
+    removing: Option<i64>,
+    /// The last reload, remove, or open that failed, as one sentence. The
+    /// status bar shows it until a reload succeeds.
     error: Option<String>,
     /// The import under way or last done, until the × clears it. While
     /// it is shown, the books pane draws the rows of its tab in view.
@@ -138,6 +142,14 @@ enum Message {
     /// The file manager or the browser could not be reached. The status
     /// bar shows why.
     OpenFailed(String),
+    /// The Remove… button in the sidebar. The remove dialog opens on the
+    /// selected book.
+    AskRemove,
+    /// The dialog's Remove button. The book is removed and the library
+    /// reads again.
+    ConfirmRemove,
+    /// The dialog's Cancel button, a click outside the dialog, or Escape.
+    CancelRemove,
 }
 
 fn main() -> iced::Result {
@@ -198,6 +210,7 @@ impl Open {
             query: Query::default(),
             scroll: 0.0,
             selected: None,
+            removing: None,
             error: None,
             import: None,
             before: None,
@@ -235,6 +248,22 @@ impl Open {
         self.error = self.read().err().map(|e| format!("Reload failed: {e:#}"));
         if let Some(id) = self.selected.as_ref().map(|s| s.id) {
             self.select(id);
+        }
+    }
+
+    /// Removes a book and reads the library again, which closes the
+    /// sidebar when it showed that book. A remove that fails puts its
+    /// error in the status bar after the reload, so the error stays. The
+    /// dialog's Remove button is off while the import task holds the
+    /// library, so a missing library is not an error here.
+    fn remove(&mut self, id: i64) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        let result = library.remove(id);
+        self.reload();
+        if let Err(e) = result {
+            self.error = Some(format!("Remove failed: {e:#}"));
         }
     }
 
@@ -290,6 +319,8 @@ fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
     };
     match message {
         Message::Select(id) => open.select(id),
+        // Escape reaches Close while the dialog is shown, and cancels it.
+        Message::Close if open.removing.is_some() => open.removing = None,
         Message::Close => open.selected = None,
         Message::Show(pane) => {
             // The two panes share one scrollable id, so the new pane
@@ -368,6 +399,13 @@ fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
             return launch("open the link", move || opener::open_browser(uri));
         }
         Message::OpenFailed(error) => open.error = Some(error),
+        Message::AskRemove => open.removing = open.selected.as_ref().map(|s| s.id),
+        Message::ConfirmRemove => {
+            if let Some(id) = open.removing.take() {
+                open.remove(id);
+            }
+        }
+        Message::CancelRemove => open.removing = None,
     }
     Task::none()
 }
@@ -422,11 +460,18 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
                 None if open.hovering => Some(import::drop_hint()),
                 None => None,
             };
-            column![toolbar(open, shown_count)]
+            let window: Element<'_, Message> = column![toolbar(open, shown_count)]
                 .extend(strip)
                 .push(main)
                 .push(status_bar(open))
-                .into()
+                .into();
+            let removing = open
+                .removing
+                .and_then(|id| open.books.iter().find(|b| b.id == id));
+            match removing {
+                Some(book) => remove::over(window, book, open.library.is_some()),
+                None => window,
+            }
         }
     }
 }
@@ -495,7 +540,7 @@ fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
 /// The status bar: the count, how many books are reading and finished by
 /// the progress row read last, how many were finished this year by
 /// their finished date, and the library folder. The error of a failed
-/// reload or open takes the place of the counts. A click on the
+/// reload, remove, or open takes the place of the counts. A click on the
 /// folder opens it in the system file manager.
 fn status_bar(open: &Open) -> Element<'_, Message> {
     let has_status = |status: ReadStatus| {
@@ -541,4 +586,77 @@ fn status_bar(open: &Open) -> Element<'_, Message> {
     .height(28)
     .padding(padding::horizontal(14));
     column![theme::hline(), bar].into()
+}
+
+#[cfg(test)]
+mod tests {
+    use epubsync_core::library::{ImportOutcome, book_file_name};
+    use epubsync_epub::fixtures;
+
+    use super::*;
+
+    /// A viewer on a library with one imported book, shown in the
+    /// sidebar, and that book's id.
+    fn with_one_book() -> (tempfile::TempDir, Viewer, i64) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lib = Library::init(&dir.path().join("library")).unwrap();
+        let epub = fixtures::write_epub(dir.path(), "lhod.epub", fixtures::EPUB2_OPF);
+        let ImportOutcome::Imported { id, .. } = lib.import(&epub, false).unwrap() else {
+            panic!("not imported");
+        };
+        let mut open = Open::new(lib).unwrap();
+        open.select(id);
+        (dir, Viewer::Open(Box::new(open)), id)
+    }
+
+    fn state(viewer: &Viewer) -> &Open {
+        let Viewer::Open(open) = viewer else {
+            panic!("the library did not open");
+        };
+        open
+    }
+
+    #[test]
+    fn confirm_remove_deletes_the_book_and_closes_the_sidebar() {
+        let (_dir, mut viewer, id) = with_one_book();
+        let path = state(&viewer).folder.join(book_file_name(id));
+        assert!(path.exists());
+
+        let _ = update(&mut viewer, Message::AskRemove);
+        assert_eq!(state(&viewer).removing, Some(id));
+
+        let _ = update(&mut viewer, Message::ConfirmRemove);
+        let open = state(&viewer);
+        assert_eq!(open.removing, None);
+        assert!(open.books.is_empty());
+        assert!(open.selected.is_none());
+        assert_eq!(open.error, None);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn escape_cancels_the_dialog_and_keeps_the_book() {
+        let (_dir, mut viewer, id) = with_one_book();
+        let _ = update(&mut viewer, Message::AskRemove);
+        let _ = update(&mut viewer, Message::Close);
+        let open = state(&viewer);
+        assert_eq!(open.removing, None);
+        assert_eq!(open.selected.as_ref().map(|s| s.id), Some(id));
+        assert_eq!(open.books.len(), 1);
+    }
+
+    #[test]
+    fn remove_is_skipped_while_the_import_task_holds_the_library() {
+        let (_dir, mut viewer, _id) = with_one_book();
+        let Viewer::Open(open) = &mut viewer else {
+            panic!("the library did not open");
+        };
+        let library = open.library.take();
+        let _ = update(&mut viewer, Message::AskRemove);
+        let _ = update(&mut viewer, Message::ConfirmRemove);
+        let open = state(&viewer);
+        assert_eq!(open.removing, None);
+        assert_eq!(open.books.len(), 1);
+        drop(library);
+    }
 }

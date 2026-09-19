@@ -43,8 +43,8 @@ The workspace has four crates in one dependency direction:
 - `epubsync-core` holds the library, the device layer, the sync, the Kobo
   device, the config, and the kepubify FFI.
 - `epubsync-cli` (binary `epubsync`) and `epubsync-app` (binary
-  `epubsync-app`) sit on top of core. The viewer imports books; every
-  other write goes through the CLI.
+  `epubsync-app`) sit on top of core. The viewer imports and removes
+  books; every other write goes through the CLI.
 
 ### epubsync-epub
 
@@ -126,6 +126,14 @@ While the import strip is shown, the books pane draws the rows of the
 strip's tab (Added, Skipped, Failed) through the same query, and `Open`
 keeps the query and the scroll offset from before the import in `before`
 until the × puts them back.
+
+`remove.rs` draws the remove dialog over the window with `stack` and
+`opaque`, the Iced modal pattern. `Open.removing` holds the book id while
+the dialog is shown, and `Message::Close` (Escape) cancels the dialog
+before it closes the sidebar. The doc comment in `remove.rs` lists the
+dialog conventions: the title names the action and the book, the body
+says what happens, the buttons are verbs, Cancel sits left of the red
+Remove, and Enter does nothing.
 
 The file path, the folder path, and the description links go through the
 `opener` crate on a background task, because on macOS `open` waits for

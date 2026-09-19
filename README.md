@@ -96,8 +96,9 @@ the device, and the day, and the filter field narrows it by word or book.
 A click on the file path in the sidebar shows the file in the system file
 manager, a click on the folder path in the status bar opens the library
 folder, and a link in a description opens in the browser. The Import button
-and a drop of files onto the window add books. The CLI stays the way to
-edit, remove, and sync.
+and a drop of files onto the window add books. The Remove… button in the
+sidebar removes the selected book after a dialog that says what the
+removal does. The CLI stays the way to edit and sync.
 
 ```sh
 nix run github:ahacop/epubsync#app   # or, after brew install: epubsync-app

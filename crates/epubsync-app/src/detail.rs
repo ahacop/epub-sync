@@ -245,8 +245,9 @@ fn description_settings() -> markdown::Settings {
     markdown::Settings::with_text_size(15.5, style)
 }
 
-/// The full file path on one line, clipped. A click on it shows the file
-/// in the system file manager.
+/// The full file path on one line, clipped, and the Remove… button. A
+/// click on the path shows the file in the system file manager. Remove…
+/// is off while the import task holds the library.
 fn footer<'a>(open: &'a Open, book: &'a Book) -> Element<'a, Message> {
     let path = open.folder.join(book_file_name(book.id));
     let show = button(
@@ -258,9 +259,13 @@ fn footer<'a>(open: &'a Open, book: &'a Book) -> Element<'a, Message> {
     .on_press(Message::Reveal(path))
     .padding(0)
     .style(theme::link);
-    container(show)
-        .width(Fill)
-        .padding([8.0, INSET])
-        .clip(true)
+    let remove = button(text("Remove…").size(12))
+        .on_press_maybe(open.library.is_some().then_some(Message::AskRemove))
+        .padding([4, 9])
+        .style(theme::action);
+    row![container(show).width(Fill).clip(true), remove]
+        .spacing(12)
+        .align_y(Center)
+        .padding([5.0, INSET])
         .into()
 }

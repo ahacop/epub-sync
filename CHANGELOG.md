@@ -44,6 +44,15 @@ strip reads "Imported 12 files in 1 min 14 s", and the × on it puts the
 table back to the sort, the filter, and the scroll from before the
 import.
 
+The viewer removes books. The sidebar footer gets a Remove… button, and
+a dialog over the window asks "Remove “The Left Hand of Darkness”?" and
+says what happens: the file is deleted from the library folder, the next
+sync takes the book off any device it was sent to, and the reading
+history and the looked-up words stay. Cancel sits left of a red Remove
+button, and Escape or a click outside the dialog cancels. The removal is
+the same as `epubsync remove`, and the table reads the library again
+after it.
+
 The viewer opens paths and links. A click on the file path in the
 sidebar footer shows the file in the system file manager, a click on the
 folder path in the status bar opens the library folder, and a link in a
