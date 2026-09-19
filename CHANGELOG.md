@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+The library keeps a reading history. Sync adds a row to a new
+`progress_history` table each time a book's percent, status, last read
+time, or reading time differs from what the last sync read, and a
+`progress` view over the table holds the current state, so every command
+that read `progress` still works. Migration 4 copies the old rows into the
+history. A row records the Kobo's reading time in seconds and the date the
+book was finished, which is the last read time of the sync that first sees
+the status as finished. The date stays with the book while it is opened
+again and moves when it is finished a second time. `remove` keeps the
+history rows.
+
+The viewer's table gets a Finished column after Last read. The sidebar's
+device block says "finished 12 May" in place of "read 12 May" for a
+finished book and adds the reading time as "3 h 20 min of reading". The
+status bar counts the books finished this year. `list --sort finished`
+orders by the finished date. `list` and `show` print the finished date
+and the reading time per device, `show` prints a History line per row,
+and `show --json` adds a `history` array. The progress objects in `--json`
+output gain `time_spent` and `finished_at`. The sync report says how many
+books' progress changed.
+
 ## 0.1.8 (2026-09-17)
 
 A sync from macOS no longer leaves a `._` file next to each book it sends.

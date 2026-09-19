@@ -263,7 +263,11 @@ impl Device for Kobo {
         }
         let words =
             db.words(|volume_id| id_from_volume_id(volume_id).filter(|id| book_ids.contains(id)))?;
-        Ok(ReadBack { progress, words })
+        Ok(ReadBack {
+            progress,
+            words,
+            changed: 0,
+        })
     }
 
     fn finish(&mut self) -> Result<()> {

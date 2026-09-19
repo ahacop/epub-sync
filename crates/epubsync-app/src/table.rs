@@ -15,7 +15,7 @@ use crate::theme::{self, BODY, MONO, SANS_MEDIUM};
 use crate::{Message, Open, format};
 
 /// The columns from left to right.
-const COLUMNS: [SortKey; 8] = [
+const COLUMNS: [SortKey; 9] = [
     SortKey::Id,
     SortKey::Title,
     SortKey::Author,
@@ -24,6 +24,7 @@ const COLUMNS: [SortKey; 8] = [
     SortKey::Ease,
     SortKey::Progress,
     SortKey::LastRead,
+    SortKey::Finished,
 ];
 
 /// The header text of a column.
@@ -37,6 +38,7 @@ fn name(column: SortKey) -> &'static str {
         SortKey::Ease => "Ease",
         SortKey::Progress => "Progress",
         SortKey::LastRead => "Last read",
+        SortKey::Finished => "Finished",
     }
 }
 
@@ -50,7 +52,7 @@ fn width(column: SortKey) -> Length {
         SortKey::Words => Length::Fixed(88.0),
         SortKey::Ease => Length::Fixed(64.0),
         SortKey::Progress => Length::Fixed(200.0),
-        SortKey::LastRead => Length::Fixed(108.0),
+        SortKey::LastRead | SortKey::Finished => Length::Fixed(108.0),
     }
 }
 
@@ -214,6 +216,12 @@ fn book_row<'a>(
             .unwrap_or_default(),
     )
     .style(theme::text_color(|c| c.muted));
+    let finished = line(
+        query::finished(progress, book.id)
+            .map(format::day)
+            .unwrap_or_default(),
+    )
+    .style(theme::text_color(|c| c.muted));
 
     let cells = row![
         mark,
@@ -225,6 +233,7 @@ fn book_row<'a>(
         column_cell(ease, SortKey::Ease),
         column_cell(progress_cell(latest), SortKey::Progress),
         column_cell(last_read, SortKey::LastRead),
+        column_cell(finished, SortKey::Finished),
     ]
     .height(Fill)
     .align_y(Center);

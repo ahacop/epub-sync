@@ -11,7 +11,7 @@ use epubsync_core::config::{self, Config};
 use epubsync_core::device::{Action, Device, ReadStatus, RowUpdate};
 use epubsync_core::kobo::eject::Ejected;
 use epubsync_core::kobo::{self, Kobo};
-use epubsync_core::library::{Book, Field, ImportOutcome, Library, ProgressRow};
+use epubsync_core::library::{Book, Field, HistoryRow, ImportOutcome, Library, ProgressRow};
 use epubsync_core::metadata::{Author, Metadata, Series, format_series_number};
 use epubsync_core::query::{Filter, Query, Sort, SortKey};
 use epubsync_core::sort_name::sort_name;
@@ -157,6 +157,7 @@ enum SortFlag {
     Ease,
     Progress,
     LastRead,
+    Finished,
 }
 
 impl From<SortFlag> for SortKey {
@@ -170,6 +171,7 @@ impl From<SortFlag> for SortKey {
             SortFlag::Ease => SortKey::Ease,
             SortFlag::Progress => SortKey::Progress,
             SortFlag::LastRead => SortKey::LastRead,
+            SortFlag::Finished => SortKey::Finished,
         }
     }
 }
@@ -331,13 +333,15 @@ fn import(config: &Config, path: &Path, force: bool) -> Result<()> {
 
 /// One book as `--json` prints it: the flat record, the file path, and
 /// the progress per device. `list` prints an array of these and `show`
-/// prints one.
+/// prints one, with the book's progress history too.
 #[derive(Serialize)]
 struct BookJson<'a> {
     #[serde(flatten)]
     book: &'a Book,
     file: PathBuf,
     progress: &'a [ProgressRow],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    history: Option<&'a [HistoryRow]>,
 }
 
 /// Prints a value as indented JSON with a newline at the end.
@@ -360,6 +364,7 @@ fn list(config: &Config, query: &Query, json: bool) -> Result<()> {
                 book,
                 file: lib.book_path(book.id),
                 progress: progress.get(&book.id).map_or(&[], Vec::as_slice),
+                history: None,
             })
             .collect();
         return print_json(&rows);
@@ -375,16 +380,20 @@ fn list(config: &Config, query: &Query, json: bool) -> Result<()> {
 }
 
 /// One label and value per line, then the description as Markdown after a
-/// blank line. A field the book does not have gets no line.
+/// blank line. A field the book does not have gets no line. The Device
+/// lines hold the progress per device, and the History lines hold every
+/// change a sync saw, oldest first.
 fn show(config: &Config, id: i64, json: bool) -> Result<()> {
     let lib = Library::open(config)?;
     let book = lib.get(id)?;
     let progress = lib.book_progress(id)?;
+    let history = lib.book_history(id)?;
     if json {
         return print_json(&BookJson {
             book: &book,
             file: lib.book_path(id),
             progress: &progress,
+            history: Some(&history),
         });
     }
     let m = &book.metadata;
@@ -415,6 +424,17 @@ fn show(config: &Config, id: i64, json: bool) -> Result<()> {
     for p in &progress {
         lines.push(("Device", progress_cell(p)));
     }
+    for h in &history {
+        let cell = format!(
+            "{}  {}: {}% {} {}",
+            h.seen_day(),
+            h.device_serial,
+            h.percent,
+            status_word(h.status),
+            h.day().unwrap_or("")
+        );
+        lines.push(("History", cell.trim_end().to_string()));
+    }
 
     for (label, value) in lines {
         println!("{label:<11}{value}");
@@ -428,17 +448,47 @@ fn show(config: &Config, id: i64, json: bool) -> Result<()> {
 }
 
 /// One device's progress: the serial, the percent, the status, and the
-/// day last read.
+/// day last read. A finished book shows the day it was finished in
+/// place of the day last read, and a book finished before and opened
+/// again shows both. The reading time comes last, when the device
+/// counted any.
 fn progress_cell(p: &ProgressRow) -> String {
-    let status = match p.status {
+    let mut cell = format!("{}: {}% ", p.device_serial, p.percent);
+    match (p.status, p.finished_day()) {
+        (ReadStatus::Finished, Some(day)) => cell.push_str(&format!("finished {day}")),
+        (status, finished) => {
+            cell.push_str(status_word(status));
+            if let Some(day) = p.day() {
+                cell.push_str(&format!(" {day}"));
+            }
+            if let Some(day) = finished {
+                cell.push_str(&format!(", finished {day}"));
+            }
+        }
+    }
+    if let Some(seconds) = p.time_spent.filter(|s| *s > 0) {
+        cell.push_str(&format!(", {}", duration(seconds)));
+    }
+    cell.trim_end().to_string()
+}
+
+fn status_word(status: ReadStatus) -> &'static str {
+    match status {
         ReadStatus::Unread => "unread",
         ReadStatus::Reading => "reading",
         ReadStatus::Finished => "finished",
-    };
-    let day = p.day().unwrap_or("");
-    format!("{}: {}% {status} {day}", p.device_serial, p.percent)
-        .trim_end()
-        .to_string()
+    }
+}
+
+/// A reading time in seconds as "3 h 20 min", "20 min", or "less than a
+/// minute".
+fn duration(seconds: i64) -> String {
+    let minutes = seconds / 60;
+    match (minutes / 60, minutes % 60) {
+        (0, 0) => "less than a minute".to_string(),
+        (0, m) => format!("{m} min"),
+        (h, m) => format!("{h} h {m} min"),
+    }
 }
 
 fn words(config: &Config, book: Option<i64>, device: Option<&str>, json: bool) -> Result<()> {
@@ -803,7 +853,11 @@ fn sync(config: &Config, flags: SyncFlags) -> Result<()> {
 
     let back = core_sync::read_back(&mut lib, &mut kobo)?;
     if !back.progress.is_empty() {
-        println!("read progress for {} book(s)", back.progress.len());
+        println!(
+            "read progress for {} book(s), {} changed",
+            back.progress.len(),
+            back.changed
+        );
     }
     if !back.words.is_empty() {
         println!("{} new word(s)", back.words.len());

@@ -79,12 +79,13 @@ impl KoboDb {
         Ok(n > 0)
     }
 
-    /// The percent read, the read status, and the last read time for a
-    /// book path. `book_id` is copied into the result.
+    /// The percent read, the read status, the last read time, and the
+    /// reading time for a book path. `book_id` is copied into the result.
     pub fn progress(&self, volume_id: &str, book_id: i64) -> Result<Option<Progress>> {
         self.conn
             .query_row(
-                "SELECT ___PercentRead, ReadStatus, DateLastRead FROM content WHERE ContentID = ?1 AND ContentType = '6'",
+                "SELECT ___PercentRead, ReadStatus, DateLastRead, TimeSpentReading
+                 FROM content WHERE ContentID = ?1 AND ContentType = '6'",
                 [volume_id],
                 |r| {
                     Ok(Progress {
@@ -94,6 +95,7 @@ impl KoboDb {
                             .get::<_, Option<ReadStatus>>(1)?
                             .unwrap_or(ReadStatus::Unread),
                         last_read: r.get(2)?,
+                        time_spent: r.get(3)?,
                     })
                 },
             )

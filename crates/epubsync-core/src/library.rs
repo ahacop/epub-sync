@@ -22,6 +22,7 @@ use epubsync_epub::Epub;
 const TABLES_SQL: &str = include_str!("migrations/1-tables.sql");
 const BOOKS_AUTOINCREMENT_SQL: &str = include_str!("migrations/2-books-autoincrement.sql");
 const DELETED_BOOKS_SQL: &str = include_str!("migrations/3-deleted-books.sql");
+const PROGRESS_HISTORY_SQL: &str = include_str!("migrations/4-progress-history.sql");
 const DB_NAME: &str = "library.sqlite";
 const LOCK_NAME: &str = "lock";
 const IMPORT_TEMP: &str = "import.tmp";
@@ -275,9 +276,9 @@ impl Library {
         self.write_file(id, record, &stats)
     }
 
-    /// Deletes the file, its `sent` rows, and its `progress` rows, then
-    /// sets `deleted_at` on the book row. The row, its authors, and its
-    /// stats stay, so the book's word rows still have a title.
+    /// Deletes the file and its `sent` rows, then sets `deleted_at` on the
+    /// book row. The row, its authors, its stats, and its progress history
+    /// stay, so the book's word rows and history rows still have a title.
     pub fn remove(&mut self, id: i64) -> Result<()> {
         self.get(id)?;
         let path = self.book_path(id);
@@ -287,7 +288,6 @@ impl Library {
             Err(e) => return Err(e).with_context(|| format!("delete {}", path.display())),
         }
         let tx = self.db.transaction()?;
-        tx.execute("DELETE FROM progress WHERE book_id = ?1", [id])?;
         tx.execute("DELETE FROM sent WHERE book_id = ?1", [id])?;
         tx.execute(
             "UPDATE books SET deleted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1",
@@ -307,6 +307,7 @@ fn migrations() -> Migrations<'static> {
         M::up(TABLES_SQL),
         M::up(BOOKS_AUTOINCREMENT_SQL).foreign_key_check(),
         M::up(DELETED_BOOKS_SQL).foreign_key_check(),
+        M::up(PROGRESS_HISTORY_SQL).foreign_key_check(),
     ])
 }
 
@@ -387,31 +388,80 @@ fn insert_authors(tx: &Transaction, id: i64, authors: &[Author]) -> Result<()> {
     Ok(())
 }
 
-/// Reading progress on one device for the book it is keyed by.
+/// The current reading progress on one device for the book it is keyed
+/// by: the newest history row for the book and the device.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProgressRow {
     pub device_serial: String,
     pub percent: i64,
     pub status: ReadStatus,
     pub last_read: Option<String>,
+    /// The Kobo's reading time in seconds.
+    pub time_spent: Option<i64>,
+    /// When the status last turned finished. Set on the row that first
+    /// reads as finished and carried to every row after it, so a book
+    /// opened again keeps the date.
+    pub finished_at: Option<String>,
 }
 
 impl ProgressRow {
     /// The day part of `last_read`: the first ten characters of the
     /// timestamp, as "2026-09-08".
     pub fn day(&self) -> Option<&str> {
-        self.last_read.as_deref().map(|d| d.get(..10).unwrap_or(d))
+        self.last_read.as_deref().map(day_of)
+    }
+
+    /// The day part of `finished_at`, as "2026-05-12".
+    pub fn finished_day(&self) -> Option<&str> {
+        self.finished_at.as_deref().map(day_of)
     }
 }
 
-/// Reads the four progress columns that start at column `first`.
-fn progress_from_row(r: &rusqlite::Row, first: usize) -> rusqlite::Result<ProgressRow> {
+/// The first ten characters of a timestamp, as "2026-09-08".
+fn day_of(timestamp: &str) -> &str {
+    timestamp.get(..10).unwrap_or(timestamp)
+}
+
+/// The columns of the `progress` view after `book_id`, in the order
+/// `progress_from_row` reads them.
+pub(crate) const PROGRESS_COLUMNS: &str =
+    "device_serial, percent, status, last_read, time_spent, finished_at";
+
+/// Reads the `PROGRESS_COLUMNS` that start at column `first`.
+pub(crate) fn progress_from_row(r: &rusqlite::Row, first: usize) -> rusqlite::Result<ProgressRow> {
     Ok(ProgressRow {
         device_serial: r.get(first)?,
         percent: r.get(first + 1)?,
         status: r.get(first + 2)?,
         last_read: r.get(first + 3)?,
+        time_spent: r.get(first + 4)?,
+        finished_at: r.get(first + 5)?,
     })
+}
+
+/// One row of a book's progress history: what one sync read for the
+/// book on one device. `seen_at` is the time of that sync.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HistoryRow {
+    pub device_serial: String,
+    pub percent: i64,
+    pub status: ReadStatus,
+    pub last_read: Option<String>,
+    pub time_spent: Option<i64>,
+    pub finished_at: Option<String>,
+    pub seen_at: String,
+}
+
+impl HistoryRow {
+    /// The day part of `last_read`, as "2026-09-08".
+    pub fn day(&self) -> Option<&str> {
+        self.last_read.as_deref().map(day_of)
+    }
+
+    /// The day part of `seen_at`, as "2026-09-19".
+    pub fn seen_day(&self) -> &str {
+        day_of(&self.seen_at)
+    }
 }
 
 /// One looked-up word, with the title of the book it came from. The
@@ -438,9 +488,9 @@ impl Library {
     /// Every progress row, grouped by book id and in device order within
     /// a book.
     pub fn progress(&self) -> Result<BTreeMap<i64, Vec<ProgressRow>>> {
-        let mut stmt = self.db.prepare(
-            "SELECT book_id, device_serial, percent, status, last_read FROM progress ORDER BY book_id, device_serial",
-        )?;
+        let mut stmt = self.db.prepare(&format!(
+            "SELECT book_id, {PROGRESS_COLUMNS} FROM progress ORDER BY book_id, device_serial"
+        ))?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, progress_from_row(r, 1)?)))?;
         let mut by_book: BTreeMap<i64, Vec<ProgressRow>> = BTreeMap::new();
         for row in rows {
@@ -453,10 +503,31 @@ impl Library {
     /// One book's progress rows in device order. A book with no rows, or
     /// no book with that id, gives an empty list.
     pub fn book_progress(&self, book_id: i64) -> Result<Vec<ProgressRow>> {
-        let mut stmt = self.db.prepare(
-            "SELECT device_serial, percent, status, last_read FROM progress WHERE book_id = ?1 ORDER BY device_serial",
-        )?;
+        let mut stmt = self.db.prepare(&format!(
+            "SELECT {PROGRESS_COLUMNS} FROM progress WHERE book_id = ?1 ORDER BY device_serial"
+        ))?;
         let rows = stmt.query_map([book_id], |r| progress_from_row(r, 0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// One book's history rows, oldest first. A book with no rows, or no
+    /// book with that id, gives an empty list.
+    pub fn book_history(&self, book_id: i64) -> Result<Vec<HistoryRow>> {
+        let mut stmt = self.db.prepare(
+            "SELECT device_serial, percent, status, last_read, time_spent, finished_at, seen_at
+             FROM progress_history WHERE book_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map([book_id], |r| {
+            Ok(HistoryRow {
+                device_serial: r.get(0)?,
+                percent: r.get(1)?,
+                status: r.get(2)?,
+                last_read: r.get(3)?,
+                time_spent: r.get(4)?,
+                finished_at: r.get(5)?,
+                seen_at: r.get(6)?,
+            })
+        })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 

@@ -84,6 +84,8 @@ pub struct Progress {
     pub percent: i64,
     pub status: ReadStatus,
     pub last_read: Option<String>,
+    /// The reading time in seconds, when the device counts it.
+    pub time_spent: Option<i64>,
 }
 
 /// One word looked up in the device dictionary in a library book.
@@ -110,6 +112,9 @@ pub enum RowUpdate {
 pub struct ReadBack {
     pub progress: Vec<Progress>,
     pub words: Vec<Word>,
+    /// The count of history rows sync added: the books whose progress
+    /// differs from the last read. A device returns 0, and sync sets it.
+    pub changed: usize,
 }
 
 /// A connected device. Detection is a function of each device type, since

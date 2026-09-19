@@ -269,7 +269,8 @@ fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
 }
 
 /// The status bar: the count, how many books are reading and finished by
-/// the progress row read last, and the library folder.
+/// the progress row read last, how many were finished this year by
+/// their finished date, and the library folder.
 fn status_bar(open: &Open) -> Element<'_, Message> {
     let has_status = |status: ReadStatus| {
         open.books
@@ -277,8 +278,14 @@ fn status_bar(open: &Open) -> Element<'_, Message> {
             .filter(|b| query::status(&open.progress, b.id) == status)
             .count()
     };
+    let year = format::this_year();
+    let this_year = open
+        .books
+        .iter()
+        .filter(|b| query::finished(&open.progress, b.id).is_some_and(|d| d.starts_with(&year)))
+        .count();
     let counts = format!(
-        "{} reading · {} finished",
+        "{} reading · {} finished · {this_year} this year",
         has_status(ReadStatus::Reading),
         has_status(ReadStatus::Finished)
     );

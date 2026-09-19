@@ -329,8 +329,9 @@ fn shows_one_book() {
     let db = rusqlite::Connection::open(env.path().join("library/library.sqlite")).unwrap();
     db.execute_batch(
         "INSERT INTO devices (serial) VALUES ('N1');
-         INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
-           (1, 'N1', 37, 1, '2026-09-01T10:00:00Z');",
+         INSERT INTO progress_history (book_id, device_serial, percent, status, last_read, time_spent, finished_at, seen_at) VALUES
+           (1, 'N1', 20, 1, '2026-08-20T10:00:00Z', 600, NULL, '2026-08-21T09:00:00Z'),
+           (1, 'N1', 37, 1, '2026-09-01T10:00:00Z', 12000, NULL, '2026-09-02T09:00:00Z');",
     )
     .unwrap();
     drop(db);
@@ -353,7 +354,8 @@ fn shows_one_book() {
         "Ease       ",
         "Revision   1\n",
         &format!("File       {}\n", file.display()),
-        "Device     N1: 37% reading 2026-09-01\n",
+        "Device     N1: 37% reading 2026-09-01, 3 h 20 min\n",
+        "History    2026-08-21  N1: 20% reading 2026-08-20\nHistory    2026-09-02  N1: 37% reading 2026-09-01\n",
         "\nA *human* envoy.\n",
     ] {
         assert!(out.contains(line), "{line:?} not in:\n{out}");
@@ -376,7 +378,14 @@ fn shows_one_book() {
             "word_count": 1,
             "file": file.to_str().unwrap(),
             "progress": [
-                {"device_serial": "N1", "percent": 37, "status": "reading", "last_read": "2026-09-01T10:00:00Z"},
+                {"device_serial": "N1", "percent": 37, "status": "reading", "last_read": "2026-09-01T10:00:00Z",
+                 "time_spent": 12000, "finished_at": null},
+            ],
+            "history": [
+                {"device_serial": "N1", "percent": 20, "status": "reading", "last_read": "2026-08-20T10:00:00Z",
+                 "time_spent": 600, "finished_at": null, "seen_at": "2026-08-21T09:00:00Z"},
+                {"device_serial": "N1", "percent": 37, "status": "reading", "last_read": "2026-09-01T10:00:00Z",
+                 "time_spent": 12000, "finished_at": null, "seen_at": "2026-09-02T09:00:00Z"},
             ],
         })
     );
@@ -401,9 +410,9 @@ fn lists_progress_and_words() {
     let db = rusqlite::Connection::open(env.path().join("library/library.sqlite")).unwrap();
     db.execute_batch(
         "INSERT INTO devices (serial) VALUES ('N1'), ('N2');
-         INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
-           (1, 'N1', 37, 1, '2026-09-01T10:00:00Z'),
-           (1, 'N2', 100, 2, '2026-08-01T10:00:00Z');
+         INSERT INTO progress_history (book_id, device_serial, percent, status, last_read, time_spent, finished_at, seen_at) VALUES
+           (1, 'N1', 37, 1, '2026-09-01T10:00:00Z', 1200, NULL, '2026-09-02T09:00:00Z'),
+           (1, 'N2', 100, 2, '2026-08-01T10:00:00Z', NULL, '2026-08-01T10:00:00Z', '2026-08-02T09:00:00Z');
          INSERT INTO books (id, title, deleted_at) VALUES (2, 'A Removed Book', '2026-09-03T00:00:00Z');
          INSERT INTO words (word, device_serial, book_id, dict_suffix, looked_up_at) VALUES
            ('ansible', 'N1', 1, '-en', '2026-09-02T08:00:00Z'),
@@ -414,11 +423,12 @@ fn lists_progress_and_words() {
     drop(db);
 
     env.cmd().arg("list").assert().success().stdout(
-        "    1  The Left Hand of Darkness  by Ursula K. Le Guin  [Hainish Cycle #4]  N1: 37% reading 2026-09-01  N2: 100% finished 2026-08-01\n",
+        "    1  The Left Hand of Darkness  by Ursula K. Le Guin  [Hainish Cycle #4]  N1: 37% reading 2026-09-01, 20 min  N2: 100% finished 2026-08-01\n",
     );
 
     // The same data as JSON: one flat object per book, with the fields a
-    // book does not have left out and the progress rows in device order.
+    // book does not have left out, the progress rows in device order, and
+    // no history.
     let mut books = json_output(env.cmd().args(["list", "--json"]));
     let book = &mut books[0];
     assert!(
@@ -438,8 +448,10 @@ fn lists_progress_and_words() {
             "word_count": 1,
             "file": env.path().join("library/1.kepub.epub").to_str().unwrap(),
             "progress": [
-                {"device_serial": "N1", "percent": 37, "status": "reading", "last_read": "2026-09-01T10:00:00Z"},
-                {"device_serial": "N2", "percent": 100, "status": "finished", "last_read": "2026-08-01T10:00:00Z"},
+                {"device_serial": "N1", "percent": 37, "status": "reading", "last_read": "2026-09-01T10:00:00Z",
+                 "time_spent": 1200, "finished_at": null},
+                {"device_serial": "N2", "percent": 100, "status": "finished", "last_read": "2026-08-01T10:00:00Z",
+                 "time_spent": null, "finished_at": "2026-08-01T10:00:00Z"},
             ],
         }])
     );
@@ -521,7 +533,8 @@ fn lists_progress_and_words() {
 
 /// Three books: The Left Hand of Darkness (Le Guin, Hainish Cycle 4,
 /// finished on N1 in August), A Wizard of Earthsea (Le Guin, Earthsea 1,
-/// reading on N1 in September), and Dune (Herbert, no series, not sent).
+/// finished on N1 in July and being read again in September), and Dune
+/// (Herbert, no series, not sent).
 fn library_of_three() -> Env {
     let env = Env::new();
     env.init();
@@ -552,9 +565,10 @@ fn library_of_three() -> Env {
     let db = rusqlite::Connection::open(env.path().join("library/library.sqlite")).unwrap();
     db.execute_batch(
         "INSERT INTO devices (serial) VALUES ('N1');
-         INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
-           (1, 'N1', 100, 2, '2026-08-01T10:00:00Z'),
-           (2, 'N1', 37, 1, '2026-09-01T10:00:00Z');",
+         INSERT INTO progress_history (book_id, device_serial, percent, status, last_read, finished_at, seen_at) VALUES
+           (1, 'N1', 100, 2, '2026-08-01T10:00:00Z', '2026-08-01T10:00:00Z', '2026-08-02T09:00:00Z'),
+           (2, 'N1', 100, 2, '2026-07-01T10:00:00Z', '2026-07-01T10:00:00Z', '2026-07-02T09:00:00Z'),
+           (2, 'N1', 37, 1, '2026-09-01T10:00:00Z', '2026-07-01T10:00:00Z', '2026-09-02T09:00:00Z');",
     )
     .unwrap();
     env
@@ -645,6 +659,10 @@ fn list_sorts_by_a_key_and_reverses() {
     // August, September, then the book never read.
     assert_eq!(ids(&["--sort", "last-read"]), [1, 2, 3]);
     assert_eq!(ids(&["--sort", "last-read", "--reverse"]), [3, 2, 1]);
+    // July, August, then the book never finished. A Wizard of Earthsea
+    // keeps its date while it is read again.
+    assert_eq!(ids(&["--sort", "finished"]), [2, 1, 3]);
+    assert_eq!(ids(&["--sort", "finished", "--reverse"]), [3, 1, 2]);
     // Herbert, then Le Guin's books by series: Earthsea before Hainish Cycle.
     assert_eq!(ids(&["--sort", "author,series"]), [3, 2, 1]);
     assert_eq!(ids(&["--sort", "author", "--sort", "series"]), [3, 2, 1]);

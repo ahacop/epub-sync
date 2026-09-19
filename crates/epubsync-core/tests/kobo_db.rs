@@ -36,15 +36,54 @@ fn raw(root: &Path) -> rusqlite::Connection {
     rusqlite::Connection::open(root.join(db::DB_PATH)).unwrap()
 }
 
-/// Inserts a content row the way the firmware does after its scan.
+/// Inserts a content row the way the firmware does after its scan: 37%
+/// read, reading, last read on 1 September, 600 seconds spent.
 fn insert_content(root: &Path, volume_id: &str, title: &str, attribution: &str, size: i64) {
     raw(root)
         .execute(
-            "INSERT INTO content (ContentID, ContentType, MimeType, ___UserID, Title, Attribution, ___FileSize, ___PercentRead, ReadStatus, DateLastRead, IsDownloaded)
-             VALUES (?1, '6', 'application/x-kobo-epub+zip', '', ?2, ?3, ?4, 37, 1, '2026-09-01T10:00:00Z', 'true')",
+            "INSERT INTO content (ContentID, ContentType, MimeType, ___UserID, Title, Attribution, ___FileSize, ___PercentRead, ReadStatus, DateLastRead, TimeSpentReading, IsDownloaded)
+             VALUES (?1, '6', 'application/x-kobo-epub+zip', '', ?2, ?3, ?4, 37, 1, '2026-09-01T10:00:00Z', 600, 'true')",
             rusqlite::params![volume_id, title, attribution, size],
         )
         .unwrap();
+}
+
+/// Sets the progress columns of a content row, as reading does.
+fn set_progress(
+    root: &Path,
+    volume_id: &str,
+    percent: i64,
+    status: i64,
+    last_read: Option<&str>,
+    time_spent: Option<i64>,
+) {
+    raw(root)
+        .execute(
+            "UPDATE content SET ___PercentRead = ?2, ReadStatus = ?3, DateLastRead = ?4, TimeSpentReading = ?5
+             WHERE ContentID = ?1",
+            rusqlite::params![volume_id, percent, status, last_read, time_spent],
+        )
+        .unwrap();
+}
+
+/// A library's history rows for book 1 on N1: percent, status, last
+/// read, time spent, finished at.
+type HistoryRows = Vec<(i64, i64, Option<String>, Option<i64>, Option<String>)>;
+
+fn history(lib: &Library) -> HistoryRows {
+    let mut stmt = lib
+        .db
+        .prepare(
+            "SELECT percent, status, last_read, time_spent, finished_at FROM progress_history
+             WHERE book_id = 1 AND device_serial = 'N1' ORDER BY id",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap();
+    rows.collect::<Result<_, _>>().unwrap()
 }
 
 const UNTESTED: i64 = 1;
@@ -188,9 +227,25 @@ fn reads_progress() {
     insert_content(&root, VOLUME_1, "T", "A", 1000);
     let p = db.progress(VOLUME_1, 1).unwrap().unwrap();
     assert_eq!(
-        (p.book_id, p.percent, p.status, p.last_read.as_deref()),
-        (1, 37, ReadStatus::Reading, Some("2026-09-01T10:00:00Z"))
+        (
+            p.book_id,
+            p.percent,
+            p.status,
+            p.last_read.as_deref(),
+            p.time_spent
+        ),
+        (
+            1,
+            37,
+            ReadStatus::Reading,
+            Some("2026-09-01T10:00:00Z"),
+            Some(600)
+        )
     );
+    // A null reading time reads as none.
+    set_progress(&root, VOLUME_1, 37, 1, None, None);
+    let p = db.progress(VOLUME_1, 1).unwrap().unwrap();
+    assert_eq!((p.last_read, p.time_spent), (None, None));
 }
 
 #[test]
@@ -231,6 +286,7 @@ fn reads_words_once_and_skips_words_from_other_books() {
     let back = sync::read_back(&mut lib, &mut kobo).unwrap();
     assert_eq!(back.progress.len(), 1);
     assert_eq!(back.progress[0].percent, 37);
+    assert_eq!(back.changed, 1);
     let words: Vec<(&str, i64)> = back
         .words
         .iter()
@@ -241,19 +297,144 @@ fn reads_words_once_and_skips_words_from_other_books() {
     // A second read adds nothing.
     let back = sync::read_back(&mut lib, &mut kobo).unwrap();
     assert!(back.words.is_empty());
+    assert_eq!(back.changed, 0);
     let count: i64 = lib
         .db
         .query_row("SELECT count(*) FROM words", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 2);
-    let progress: (i64, i64, String) = lib
+    let progress: (i64, i64, String, i64) = lib
         .db
-        .query_row("SELECT percent, status, last_read FROM progress WHERE book_id = 1 AND device_serial = 'N1'", [], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        .query_row("SELECT percent, status, last_read, time_spent FROM progress WHERE book_id = 1 AND device_serial = 'N1'", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })
         .unwrap();
-    assert_eq!(progress, (37, 1, "2026-09-01T10:00:00Z".into()));
+    assert_eq!(progress, (37, 1, "2026-09-01T10:00:00Z".into(), 600));
+    assert_eq!(history(&lib).len(), 1);
     kobo.finish().unwrap();
+}
+
+#[test]
+fn read_back_adds_a_history_row_per_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut lib = Library::init(&dir.path().join("library")).unwrap();
+    let epub = common::write_epub(dir.path(), "a.epub", common::EPUB2_OPF);
+    lib.import(&epub, false).unwrap();
+    let root = fake_kobo(dir.path(), "N1", UNTESTED);
+    insert_content(&root, VOLUME_1, "T", "A", 1000);
+    let mut kobo = Kobo::at(&root).unwrap();
+    kobo.open_db(true).unwrap();
+    let sep_1 = Some("2026-09-01T10:00:00Z");
+
+    // The first read makes one row. The same read makes none.
+    assert_eq!(sync::read_back(&mut lib, &mut kobo).unwrap().changed, 1);
+    assert_eq!(sync::read_back(&mut lib, &mut kobo).unwrap().changed, 0);
+    // Each column adds a row on its own.
+    set_progress(&root, VOLUME_1, 40, 1, sep_1, Some(600));
+    assert_eq!(sync::read_back(&mut lib, &mut kobo).unwrap().changed, 1);
+    set_progress(&root, VOLUME_1, 40, 0, sep_1, Some(600));
+    assert_eq!(sync::read_back(&mut lib, &mut kobo).unwrap().changed, 1);
+    set_progress(
+        &root,
+        VOLUME_1,
+        40,
+        0,
+        Some("2026-09-02T10:00:00Z"),
+        Some(600),
+    );
+    assert_eq!(sync::read_back(&mut lib, &mut kobo).unwrap().changed, 1);
+    set_progress(
+        &root,
+        VOLUME_1,
+        40,
+        0,
+        Some("2026-09-02T10:00:00Z"),
+        Some(900),
+    );
+    assert_eq!(sync::read_back(&mut lib, &mut kobo).unwrap().changed, 1);
+    let rows = history(&lib);
+    assert_eq!(rows.len(), 5);
+    assert_eq!(
+        rows[4],
+        (40, 0, Some("2026-09-02T10:00:00Z".into()), Some(900), None)
+    );
+    assert!(rows.iter().all(|r| r.4.is_none()));
+    kobo.finish().unwrap();
+}
+
+#[test]
+fn read_back_sets_the_finished_date_when_the_status_turns_finished() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut lib = Library::init(&dir.path().join("library")).unwrap();
+    let epub = common::write_epub(dir.path(), "a.epub", common::EPUB2_OPF);
+    lib.import(&epub, false).unwrap();
+    let root = fake_kobo(dir.path(), "N1", UNTESTED);
+    insert_content(&root, VOLUME_1, "T", "A", 1000);
+    let mut kobo = Kobo::at(&root).unwrap();
+    kobo.open_db(true).unwrap();
+    sync::read_back(&mut lib, &mut kobo).unwrap();
+
+    // Finished: the date is the last read time.
+    set_progress(
+        &root,
+        VOLUME_1,
+        100,
+        2,
+        Some("2026-09-03T10:00:00Z"),
+        Some(700),
+    );
+    sync::read_back(&mut lib, &mut kobo).unwrap();
+    // Opened again: the date stays.
+    set_progress(
+        &root,
+        VOLUME_1,
+        10,
+        1,
+        Some("2026-09-10T10:00:00Z"),
+        Some(800),
+    );
+    sync::read_back(&mut lib, &mut kobo).unwrap();
+    // Finished again: the date moves.
+    set_progress(
+        &root,
+        VOLUME_1,
+        100,
+        2,
+        Some("2026-09-20T10:00:00Z"),
+        Some(900),
+    );
+    sync::read_back(&mut lib, &mut kobo).unwrap();
+    let dates: Vec<Option<String>> = history(&lib).into_iter().map(|r| r.4).collect();
+    assert_eq!(
+        dates,
+        [
+            None,
+            Some("2026-09-03T10:00:00Z".into()),
+            Some("2026-09-03T10:00:00Z".into()),
+            Some("2026-09-20T10:00:00Z".into()),
+        ]
+    );
+
+    // A row with no last read time that turns finished gets the sync time.
+    let root_2 = fake_kobo(&dir.path().join("second"), "N2", UNTESTED);
+    insert_content(&root_2, VOLUME_1, "T", "A", 1000);
+    set_progress(&root_2, VOLUME_1, 100, 2, None, None);
+    let mut kobo_2 = Kobo::at(&root_2).unwrap();
+    kobo_2.open_db(true).unwrap();
+    sync::read_back(&mut lib, &mut kobo_2).unwrap();
+    let (last_read, finished_at, seen_at): (Option<String>, String, String) = lib
+        .db
+        .query_row(
+            "SELECT last_read, finished_at, seen_at FROM progress_history ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(last_read, None);
+    assert_eq!(finished_at, seen_at);
+    assert_eq!(seen_at.len(), "2026-09-19T12:00:00Z".len());
+    kobo.finish().unwrap();
+    kobo_2.finish().unwrap();
 }
 
 #[test]

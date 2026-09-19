@@ -1,5 +1,7 @@
 //! The small text formatters the panes share.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use epubsync_core::device::ReadStatus;
 use epubsync_core::metadata::{Author, Series, format_series_number};
 
@@ -69,9 +71,72 @@ pub fn authors(authors: &[Author]) -> String {
     names.join(" & ")
 }
 
+/// A reading time in seconds as "3 h 20 min", "20 min", or "less than a
+/// minute".
+pub fn duration(seconds: i64) -> String {
+    let minutes = seconds / 60;
+    match (minutes / 60, minutes % 60) {
+        (0, 0) => "less than a minute".to_string(),
+        (0, m) => format!("{m} min"),
+        (h, m) => format!("{h} h {m} min"),
+    }
+}
+
+/// The four-digit year of the system clock, in UTC, as "2026". A clock
+/// before 1970 counts as 1970.
+pub fn this_year() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    year_of_days((seconds / 86_400) as i64).to_string()
+}
+
+/// The civil year of a count of days since 1970-01-01, by the
+/// days-to-civil arithmetic of Howard Hinnant's date algorithms. Only the
+/// year is kept.
+fn year_of_days(days: i64) -> i64 {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    // The algorithm's year starts in March, so January and February
+    // belong to the next civil year.
+    let month = (5 * day_of_year + 2) / 153;
+    if month >= 10 { year + 1 } else { year }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duration_rounds_down_to_minutes() {
+        assert_eq!(duration(0), "less than a minute");
+        assert_eq!(duration(59), "less than a minute");
+        assert_eq!(duration(60), "1 min");
+        assert_eq!(duration(1200), "20 min");
+        assert_eq!(duration(3600), "1 h 0 min");
+        assert_eq!(duration(12_000), "3 h 20 min");
+        assert_eq!(duration(90_000), "25 h 0 min");
+    }
+
+    #[test]
+    fn year_of_days_crosses_the_new_year_and_the_leap_day() {
+        assert_eq!(year_of_days(0), 1970);
+        assert_eq!(year_of_days(364), 1970);
+        assert_eq!(year_of_days(365), 1971);
+        // 2024 was a leap year: day 19723 is 1 January, 19782 is 29 February.
+        assert_eq!(year_of_days(19_722), 2023);
+        assert_eq!(year_of_days(19_723), 2024);
+        assert_eq!(year_of_days(19_782), 2024);
+        assert_eq!(year_of_days(19_783), 2024);
+        assert_eq!(year_of_days(20_453), 2025);
+        assert_eq!(year_of_days(20_454), 2026);
+        assert_eq!(this_year().len(), 4);
+    }
 
     #[test]
     fn day_names_each_month() {

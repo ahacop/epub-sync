@@ -388,18 +388,42 @@ fn book_progress_reads_one_book_in_device_order() {
     lib.db
         .execute_batch(&format!(
             "INSERT INTO devices (serial) VALUES ('N1'), ('N2');
-             INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
-               ({id}, 'N2', 100, 2, NULL),
-               ({id}, 'N1', 37, 1, '2026-09-01');"
+             INSERT INTO progress_history (book_id, device_serial, percent, status, last_read, time_spent, finished_at, seen_at) VALUES
+               ({id}, 'N2', 100, 2, NULL, NULL, '2026-08-01', '2026-08-02'),
+               ({id}, 'N1', 20, 1, '2026-08-20', 600, NULL, '2026-08-21'),
+               ({id}, 'N1', 37, 1, '2026-09-01', 1200, NULL, '2026-09-02');"
         ))
         .unwrap();
 
+    // The current progress is the newest row per device.
     let rows = lib.book_progress(id).unwrap();
     let serials: Vec<&str> = rows.iter().map(|p| p.device_serial.as_str()).collect();
     assert_eq!(serials, ["N1", "N2"]);
     assert_eq!(rows[0].percent, 37);
     assert_eq!(rows[0].last_read.as_deref(), Some("2026-09-01"));
+    assert_eq!(rows[0].time_spent, Some(1200));
+    assert_eq!(rows[0].finished_at, None);
+    assert_eq!(rows[1].finished_at.as_deref(), Some("2026-08-01"));
     assert!(lib.book_progress(id + 1).unwrap().is_empty());
+    let all = lib.progress().unwrap();
+    assert_eq!(all[&id], rows);
+
+    // The history is every row, oldest first.
+    let history = lib.book_history(id).unwrap();
+    let summary: Vec<(&str, i64, &str)> = history
+        .iter()
+        .map(|h| (h.device_serial.as_str(), h.percent, h.seen_day()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("N2", 100, "2026-08-02"),
+            ("N1", 20, "2026-08-21"),
+            ("N1", 37, "2026-09-02")
+        ]
+    );
+    assert_eq!(history[1].time_spent, Some(600));
+    assert!(lib.book_history(id + 1).unwrap().is_empty());
 }
 
 #[test]
@@ -420,7 +444,11 @@ fn remove_deletes_the_file_and_marks_the_book_row() {
         )
         .unwrap();
     lib.db
-        .execute("INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES (?1, 'N123', 50, 1, '2026-01-01')", [id])
+        .execute(
+            "INSERT INTO progress_history (book_id, device_serial, percent, status, last_read, seen_at)
+             VALUES (?1, 'N123', 50, 1, '2026-01-01', '2026-01-02')",
+            [id],
+        )
         .unwrap();
     lib.db
         .execute(
@@ -444,7 +472,8 @@ fn remove_deletes_the_file_and_marks_the_book_row() {
     assert_eq!(count("book_authors"), 1);
     assert_eq!(count("book_stats"), 1);
     assert_eq!(count("sent"), 0);
-    assert_eq!(count("progress"), 0);
+    assert_eq!(count("progress_history"), 1);
+    assert_eq!(lib.book_history(id).unwrap().len(), 1);
     let deleted_at: Option<String> = lib
         .db
         .query_row("SELECT deleted_at FROM books WHERE id = ?1", [id], |r| {
@@ -535,4 +564,46 @@ fn the_migration_drops_word_rows_without_a_book() {
         ),
         ("ansible", 1, "Kept")
     );
+}
+
+#[test]
+fn the_migration_copies_progress_into_the_history() {
+    let s = setup();
+    // A database at migration 3: two books, one finished on N1 and one
+    // being read on N1, and a progress row for a book with no row.
+    std::fs::remove_file(s.config.library.join("library.sqlite")).unwrap();
+    let db = rusqlite::Connection::open(s.config.library.join("library.sqlite")).unwrap();
+    for sql in [
+        include_str!("../src/migrations/1-tables.sql"),
+        include_str!("../src/migrations/2-books-autoincrement.sql"),
+        include_str!("../src/migrations/3-deleted-books.sql"),
+    ] {
+        db.execute_batch(sql).unwrap();
+    }
+    db.execute_batch(
+        "PRAGMA user_version = 3;
+         INSERT INTO books (id, title) VALUES (1, 'Done'), (2, 'Open');
+         INSERT INTO devices (serial) VALUES ('N1');
+         INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
+           (1, 'N1', 100, 2, '2026-05-12T10:00:00Z'),
+           (2, 'N1', 37, 1, '2026-09-01T10:00:00Z'),
+           (9, 'N1', 5, 1, NULL);",
+    )
+    .unwrap();
+    drop(db);
+
+    let lib = Library::open(&s.config).unwrap();
+    let progress = lib.progress().unwrap();
+    assert_eq!(progress.len(), 2);
+    let done = &progress[&1][0];
+    assert_eq!(done.percent, 100);
+    assert_eq!(done.finished_at.as_deref(), Some("2026-05-12T10:00:00Z"));
+    assert_eq!(done.time_spent, None);
+    let open = &progress[&2][0];
+    assert_eq!(open.percent, 37);
+    assert_eq!(open.finished_at, None);
+    let history = lib.book_history(1).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].seen_at.len(), "2026-09-19T12:00:00Z".len());
+    assert!(lib.book_history(9).unwrap().is_empty());
 }

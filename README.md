@@ -51,11 +51,17 @@ with that text in the title, an author name, or the series name, as the
 viewer's filter field does. `--title`, `--author`, and `--series` match one
 field each. `--reading`, `--finished`, and `--unread` keep the books in that
 state on the device they were read on last. `--sort` takes `id`, `title`,
-`author`, `series`, `words`, `ease`, `progress`, or `last-read`. Several
-keys, as `--sort author,title`, break ties in turn, and `--reverse` turns the
-whole order around. A title sorts without a leading "The", "A", or "An", and
-a book with no value for a key comes last. These are the rules the viewer's
-columns use.
+`author`, `series`, `words`, `ease`, `progress`, `last-read`, or
+`finished`. Several keys, as `--sort author,title`, break ties in turn, and
+`--reverse` turns the whole order around. A title sorts without a leading
+"The", "A", or "An", and a book with no value for a key comes last. These
+are the rules the viewer's columns use.
+
+Each sync that finds a book's progress changed adds a row to the book's
+history, so `show` lists every read a sync saw, oldest first, with the day
+it was seen. A book's finished date is the last read time of the sync that
+first saw it finished. The date stays while the book is opened again and
+moves when it is finished a second time.
 
 `edit` flags: `--title`, `--publisher`, `--description`, `--author "Name|Sort"`
 (repeat for several authors), `--series`, and `--series-number`.
@@ -66,11 +72,14 @@ data as JSON, so a script can read it without splitting the text lines.
 flat object: `id`, `revision`, `title`, `authors` with a name and a sort
 name each, `series` with a name and a number, `publisher`, `description`,
 `word_count`, `reading_ease`, `file`, and `progress` with one entry per
-device. A field the book does not have is left out. `words` prints an
-array of words, newest first, each with the word, the device serial, the
-book id and title, and the time it was looked up. `sync --dry-run --json`
-prints the device, the write gate, and the actions, each with its book
-title.
+device: the serial, the percent, the status, the last read time, the
+reading time in seconds as `time_spent`, and `finished_at`. `show` adds
+`history`, the book's rows oldest first, each with `seen_at`, the time of
+the sync that read it. A field the book does not have is left out. `words`
+prints an array of words, newest first, each with the word, the device
+serial, the book id and title, and the time it was looked up.
+`sync --dry-run --json` prints the device, the write gate, and the actions,
+each with its book title.
 
 ## Viewer
 
@@ -78,11 +87,14 @@ The viewer is a window that shows the library as a table with sortable
 columns and a filter. A click on a column header sorts by that column, and
 the filter field narrows the table by title, author, or series. A click on
 a row opens the book's details in a sidebar: its title, authors, series,
-publisher, description, reading progress per device, the words looked up in
-it, and file path. The Words tab in the toolbar swaps the table for every
-word looked up on a device, newest first, with the book, the device, and the
-day, and the filter field narrows it by word or book. The viewer is
-read-only. The CLI stays the way to import, edit, remove, and sync.
+publisher, description, reading progress per device with the finished date
+and the reading time, the words looked up in it, and file path. The table's
+Finished column holds the day a book was finished, and the status bar
+counts the books finished this year. The Words tab in the toolbar swaps the
+table for every word looked up on a device, newest first, with the book,
+the device, and the day, and the filter field narrows it by word or book.
+The viewer is read-only. The CLI stays the way to import, edit, remove, and
+sync.
 
 ```sh
 nix run github:ahacop/epubsync#app   # or, after brew install: epubsync-app

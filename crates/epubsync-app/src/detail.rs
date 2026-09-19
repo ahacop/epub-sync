@@ -1,6 +1,7 @@
 //! The sidebar: the selected book's details, its description, its
 //! progress on each device, and the words looked up in it.
 
+use epubsync_core::device::ReadStatus;
 use epubsync_core::library::{Book, Field, ProgressRow, WordRow, book_file_name};
 use epubsync_core::metadata::format_series_number;
 use iced::widget::{
@@ -191,14 +192,17 @@ fn field<'a>(label: &'a str, value: impl Into<Element<'a, Message>>) -> Element<
     .into()
 }
 
-/// One device's progress: the serial and the day, a full-width bar, then
-/// the percent and the status chip.
+/// One device's progress: the serial and the day, a full-width bar, the
+/// percent and the status chip, then the reading time when the device
+/// counted any. A finished book's day is the day it was finished; any
+/// other book's is the day it was last read.
 fn device(p: &ProgressRow) -> Element<'_, Message> {
-    let when = match p.day() {
-        Some(day) => format!("read {}", format::day(day)),
-        None => "not opened".to_string(),
+    let when = match (p.status, p.finished_day(), p.day()) {
+        (ReadStatus::Finished, Some(day), _) => format!("finished {}", format::day(day)),
+        (_, _, Some(day)) => format!("read {}", format::day(day)),
+        (_, _, None) => "not opened".to_string(),
     };
-    column![
+    let mut block = column![
         row![
             text(&p.device_serial)
                 .font(MONO)
@@ -221,8 +225,15 @@ fn device(p: &ProgressRow) -> Element<'_, Message> {
         ]
         .align_y(Center),
     ]
-    .spacing(6)
-    .into()
+    .spacing(6);
+    if let Some(seconds) = p.time_spent.filter(|s| *s > 0) {
+        block = block.push(
+            text(format!("{} of reading", format::duration(seconds)))
+                .size(12.5)
+                .style(theme::text_color(|c| c.muted)),
+        );
+    }
+    block.into()
 }
 
 /// The description in the serif face at 15.5 px.

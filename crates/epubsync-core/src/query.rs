@@ -3,8 +3,10 @@
 //! flags and the same column clicks give the same rows.
 //!
 //! A book's progress is the row read last on any device, and a book with
-//! no row counts as unread. The sort puts a book with no value for the
-//! key after every book that has one, and ties keep id order.
+//! no row counts as unread. A book's finished date is the latest date any
+//! device finished it on, whatever the book's status is now. The sort
+//! puts a book with no value for the key after every book that has one,
+//! and ties keep id order.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -28,6 +30,8 @@ pub enum SortKey {
     Progress,
     /// The day of the latest progress row.
     LastRead,
+    /// The day the book was finished, by `finished`.
+    Finished,
 }
 
 /// The sort keys and the direction. The second key orders the books the
@@ -138,6 +142,18 @@ pub fn status(progress: &BTreeMap<i64, Vec<ProgressRow>>, book_id: i64) -> ReadS
     latest(progress, book_id).map_or(ReadStatus::Unread, |p| p.status)
 }
 
+/// The day the book was finished, as "2026-05-12": the greatest
+/// `finished_at` over the book's rows. A book finished on one device and
+/// opened again on another keeps the date. `None` for a book no device
+/// has finished.
+pub fn finished(progress: &BTreeMap<i64, Vec<ProgressRow>>, book_id: i64) -> Option<&str> {
+    progress
+        .get(&book_id)?
+        .iter()
+        .filter_map(ProgressRow::finished_day)
+        .max()
+}
+
 /// The title in lower case without a leading "The ", "A ", or "An ".
 pub fn title_key(title: &str) -> String {
     let lower = title.to_lowercase();
@@ -223,6 +239,7 @@ fn key(book: &Book, sort: SortKey, progress: &BTreeMap<i64, Vec<ProgressRow>>) -
         SortKey::LastRead => latest(progress, book.id)
             .and_then(ProgressRow::day)
             .map(|d| Key::Day(d.to_string())),
+        SortKey::Finished => finished(progress, book.id).map(|d| Key::Day(d.to_string())),
     }
 }
 
@@ -276,13 +293,23 @@ mod tests {
             percent,
             status,
             last_read: last_read.map(|d| format!("{d}T10:00:00Z")),
+            time_spent: None,
+            finished_at: None,
+        }
+    }
+
+    /// A progress row finished on the given day.
+    fn finished_on(day: &str) -> ProgressRow {
+        ProgressRow {
+            finished_at: Some(format!("{day}T10:00:00Z")),
+            ..progress(100, ReadStatus::Finished, Some(day))
         }
     }
 
     /// Three books: The Warden (Trollope, Barsetshire 1, 62% reading,
     /// 72,000 words, ease 61), Villette (Brontë, no series, no progress,
     /// 196,000 words, ease 55), and A Princess of Mars (Burroughs,
-    /// Martian 1, 100% finished, no stats).
+    /// Martian 1, 100% finished in May, no stats).
     fn library() -> (Vec<Book>, BTreeMap<i64, Vec<ProgressRow>>) {
         let books = vec![
             book(
@@ -324,10 +351,7 @@ mod tests {
                 1,
                 vec![progress(62, ReadStatus::Reading, Some("2026-09-08"))],
             ),
-            (
-                3,
-                vec![progress(100, ReadStatus::Finished, Some("2026-05-12"))],
-            ),
+            (3, vec![finished_on("2026-05-12")]),
         ]);
         (books, progress)
     }
@@ -407,6 +431,48 @@ mod tests {
     fn last_read_order_puts_a_book_without_a_row_last() {
         // May, September, then Villette
         assert_eq!(ids(&sorted(SortKey::LastRead)), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn finished_order_puts_a_book_never_finished_last() {
+        let (mut books, mut progress) = library();
+        // The Warden was finished in July and opened again in September.
+        progress.get_mut(&1).unwrap().push(ProgressRow {
+            device_serial: "N456".into(),
+            ..finished_on("2026-07-02")
+        });
+        books.push(book(4, "Emma", None, None, Stats::default()));
+        progress.insert(4, vec![finished_on("2026-01-15")]);
+        let query = sorted(SortKey::Finished);
+        let ids: Vec<i64> = query
+            .select(&books, &progress)
+            .iter()
+            .map(|b| b.id)
+            .collect();
+        // January, May, July, then Villette.
+        assert_eq!(ids, vec![4, 3, 1, 2]);
+    }
+
+    #[test]
+    fn finished_is_the_greatest_date_over_the_devices() {
+        let rows = BTreeMap::from([(
+            1,
+            vec![
+                ProgressRow {
+                    device_serial: "N1".into(),
+                    ..finished_on("2026-03-01")
+                },
+                ProgressRow {
+                    device_serial: "N2".into(),
+                    ..finished_on("2026-07-02")
+                },
+                progress(10, ReadStatus::Reading, Some("2026-09-08")),
+            ],
+        )]);
+        assert_eq!(finished(&rows, 1), Some("2026-07-02"));
+        assert_eq!(finished(&rows, 2), None);
+        let unfinished = BTreeMap::from([(1, vec![progress(10, ReadStatus::Reading, None)])]);
+        assert_eq!(finished(&unfinished, 1), None);
     }
 
     #[test]

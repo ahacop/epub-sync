@@ -77,6 +77,14 @@ ids on the device, and the `sent` rows, and returns the actions. `sync.rs`
 runs plan, gate, apply, row update, and read back in that order, and
 updates `sent` after each book so an interrupted sync resumes.
 
+Progress read back from a device goes into `progress_history`, one row
+per change a sync sees, and the `progress` view selects the newest row
+per book per device. A history row's `finished_at` is the `last_read` of
+the first row that reads as finished, copied to every later row and
+replaced when the status turns finished again. `sync::next_row` is the
+pure rule that decides whether a read adds a row and what its
+`finished_at` is.
+
 `Device` is the trait. `Kobo` is the only implementation: a mounted volume
 with `.kobo/version`, books under `EpubSync/`, and the database at
 `.kobo/KoboReader.sqlite` opened in place. The column names and the file
