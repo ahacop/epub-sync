@@ -400,6 +400,143 @@ fn lists_progress_and_words() {
         .stdout(predicate::str::contains("ansible").not());
 }
 
+/// Three books: The Left Hand of Darkness (Le Guin, Hainish Cycle 4,
+/// finished on N1 in August), A Wizard of Earthsea (Le Guin, Earthsea 1,
+/// reading on N1 in September), and Dune (Herbert, no series, not sent).
+fn library_of_three() -> Env {
+    let env = Env::new();
+    env.init();
+    let books = env.dir.path().join("books");
+    std::fs::create_dir(&books).unwrap();
+    write_epub(&books, "a.epub", OPF);
+    write_epub(
+        &books,
+        "b.epub",
+        &OPF.replace("The Left Hand of Darkness", "A Wizard of Earthsea")
+            .replace("Hainish Cycle", "Earthsea")
+            .replace("content=\"4\"", "content=\"1\""),
+    );
+    write_epub(
+        &books,
+        "c.epub",
+        &OPF.replace("The Left Hand of Darkness", "Dune")
+            .replace("Ursula K. Le Guin", "Frank Herbert")
+            .replace(
+                "    <meta name=\"calibre:series\" content=\"Hainish Cycle\"/>\n    <meta name=\"calibre:series_index\" content=\"4\"/>\n",
+                "",
+            ),
+    );
+    env.cmd()
+        .args(["import", books.to_str().unwrap()])
+        .assert()
+        .success();
+    let db = rusqlite::Connection::open(env.dir.path().join("library/library.sqlite")).unwrap();
+    db.execute_batch(
+        "INSERT INTO devices (serial) VALUES ('N1');
+         INSERT INTO progress (book_id, device_serial, percent, status, last_read) VALUES
+           (1, 'N1', 100, 2, '2026-08-01T10:00:00Z'),
+           (2, 'N1', 37, 1, '2026-09-01T10:00:00Z');",
+    )
+    .unwrap();
+    env
+}
+
+#[test]
+fn list_filters_by_text_author_series_and_status() {
+    let env = library_of_three();
+    let titles = |args: &[&str]| -> Vec<String> {
+        let out = env
+            .cmd()
+            .arg("list")
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| l[7..].split("  ").next().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        titles(&[]),
+        ["The Left Hand of Darkness", "A Wizard of Earthsea", "Dune"]
+    );
+    assert_eq!(titles(&["earth"]), ["A Wizard of Earthsea"]);
+    assert_eq!(titles(&["herbert"]), ["Dune"]);
+    assert_eq!(
+        titles(&["--author", "le guin"]),
+        ["The Left Hand of Darkness", "A Wizard of Earthsea"]
+    );
+    assert_eq!(
+        titles(&["--title", "of"]),
+        ["The Left Hand of Darkness", "A Wizard of Earthsea"]
+    );
+    assert_eq!(
+        titles(&["--series", "hainish"]),
+        ["The Left Hand of Darkness"]
+    );
+    assert_eq!(
+        titles(&["--author", "le guin", "--series", "earthsea"]),
+        ["A Wizard of Earthsea"]
+    );
+    assert_eq!(titles(&["--reading"]), ["A Wizard of Earthsea"]);
+    assert_eq!(titles(&["--finished"]), ["The Left Hand of Darkness"]);
+    assert_eq!(titles(&["--unread"]), ["Dune"]);
+    assert!(titles(&["--author", "tolkien"]).is_empty());
+
+    env.cmd()
+        .args(["list", "--reading", "--finished"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn list_sorts_by_a_key_and_reverses() {
+    let env = library_of_three();
+    let ids = |args: &[&str]| -> Vec<i64> {
+        let out = env
+            .cmd()
+            .arg("list")
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| l.trim_start().split("  ").next().unwrap().parse().unwrap())
+            .collect()
+    };
+    assert_eq!(ids(&[]), [1, 2, 3]);
+    // Dune, Left Hand of Darkness, Wizard of Earthsea: the articles do not count.
+    assert_eq!(ids(&["--sort", "title"]), [3, 1, 2]);
+    assert_eq!(ids(&["--sort", "title", "--reverse"]), [2, 1, 3]);
+    // Herbert, then Le Guin twice in id order.
+    assert_eq!(ids(&["--sort", "author"]), [3, 1, 2]);
+    // Earthsea, Hainish Cycle, then the book with no series.
+    assert_eq!(ids(&["--sort", "series"]), [2, 1, 3]);
+    // 37%, 100%, then the book with no progress row.
+    assert_eq!(ids(&["--sort", "progress"]), [2, 1, 3]);
+    // August, September, then the book never read.
+    assert_eq!(ids(&["--sort", "last-read"]), [1, 2, 3]);
+    assert_eq!(ids(&["--sort", "last-read", "--reverse"]), [3, 2, 1]);
+    // Herbert, then Le Guin's books by series: Earthsea before Hainish Cycle.
+    assert_eq!(ids(&["--sort", "author,series"]), [3, 2, 1]);
+    assert_eq!(ids(&["--sort", "author", "--sort", "series"]), [3, 2, 1]);
+
+    env.cmd()
+        .args(["list", "--sort", "colour"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("last-read"));
+}
+
 #[test]
 fn eject_skips_a_folder_that_is_not_a_volume() {
     let env = Env::new();

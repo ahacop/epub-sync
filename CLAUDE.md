@@ -84,6 +84,11 @@ size rule come from Calibre's Kobo driver. Every write is gated on
 `dbversion`. A version not in `TESTED_VERSIONS` makes sync skip
 replacements and row updates.
 
+`query.rs` holds the filter and sort rules. `Query::select` takes the
+books and the progress rows and returns the books to show, in order. The
+`list` flags and the viewer's filter field and column clicks both build a
+`Query`, so a change to a rule lands in both.
+
 `kepub.rs` calls `KepubConvert` from the Go archive. `build.rs` compiles
 that archive, and the crate declares `links = "kepubshim"`.
 

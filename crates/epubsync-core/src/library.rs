@@ -380,6 +380,14 @@ pub struct ProgressRow {
     pub last_read: Option<String>,
 }
 
+impl ProgressRow {
+    /// The day part of `last_read`: the first ten characters of the
+    /// timestamp, as "2026-09-08".
+    pub fn day(&self) -> Option<&str> {
+        self.last_read.as_deref().map(|d| d.get(..10).unwrap_or(d))
+    }
+}
+
 /// Reads the four progress columns that start at column `first`.
 fn progress_from_row(r: &rusqlite::Row, first: usize) -> rusqlite::Result<ProgressRow> {
     Ok(ProgressRow {

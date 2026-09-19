@@ -30,6 +30,7 @@ one file and needs no other program on `PATH`.
 epubsync init ~/Books/epubsync      # create the library folder and point the config at it
 epubsync import book.epub           # convert to KEPUB and add it; a folder imports every EPUB in it
 epubsync list                       # every book: id, title, authors, series, progress per device
+epubsync list --reading --sort title # the books being read, in title order
 epubsync show 3                     # one book's whole record, stats, file path, and progress
 epubsync edit 3                     # open the metadata as TOML in $EDITOR
 epubsync edit 3 --title "New Title" # set one field without the editor
@@ -43,6 +44,17 @@ epubsync words                      # words looked up on the Kobo, newest first
 The library is one folder. It holds every book as `<id>.kepub.epub` and the
 database `library.sqlite`. Copy the folder to back it up. The config file
 holds the folder path and lives in the XDG config directory.
+
+`list` prints the books in id order. A word after `list` keeps only the books
+with that text in the title, an author name, or the series name, as the
+viewer's filter field does. `--title`, `--author`, and `--series` match one
+field each. `--reading`, `--finished`, and `--unread` keep the books in that
+state on the device they were read on last. `--sort` takes `id`, `title`,
+`author`, `series`, `words`, `ease`, `progress`, or `last-read`. Several
+keys, as `--sort author,title`, break ties in turn, and `--reverse` turns the
+whole order around. A title sorts without a leading "The", "A", or "An", and
+a book with no value for a key comes last. These are the rules the viewer's
+columns use.
 
 `edit` flags: `--title`, `--publisher`, `--description`, `--author "Name|Sort"`
 (repeat for several authors), `--series`, and `--series-number`.

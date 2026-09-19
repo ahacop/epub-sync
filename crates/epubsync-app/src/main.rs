@@ -14,11 +14,11 @@ use std::path::PathBuf;
 use epubsync_core::config;
 use epubsync_core::device::ReadStatus;
 use epubsync_core::library::{Book, Library, ProgressRow};
+use epubsync_core::query::{self, Query, Sort, SortKey};
 use iced::keyboard::{self, key};
 use iced::widget::{column, container, markdown, row, space, text, text_input};
 use iced::{Center, Element, Fill, Subscription, Task, padding};
 
-use crate::table::{Column, Sort};
 use crate::theme::{BODY, MONO, SANS_SEMIBOLD};
 
 /// The state of the viewer window: what it draws.
@@ -27,8 +27,9 @@ enum Viewer {
     /// The library could not be opened. The window shows the error text.
     OpenFailed(String),
     /// The library is open. The window shows the table and, when a book
-    /// is selected, the sidebar.
-    Open(Open),
+    /// is selected, the sidebar. The box keeps the enum the size of the
+    /// small variant.
+    Open(Box<Open>),
 }
 
 #[derive(Debug, Clone)]
@@ -39,9 +40,9 @@ struct Open {
     books: Vec<Book>,
     /// Reading progress by book id, one row per device.
     progress: BTreeMap<i64, Vec<ProgressRow>>,
-    sort: Sort,
-    /// The filter field's text.
-    filter: String,
+    /// The sorted column and the filter field's text, as the core query
+    /// the table selects its rows with.
+    query: Query,
     /// The table body's scroll offset in pixels. The table builds only
     /// the rows in view at that offset.
     scroll: f32,
@@ -64,7 +65,7 @@ enum Message {
     /// The sidebar's close button, or the Escape key.
     Close,
     /// A click on a column header.
-    Sort(Column),
+    Sort(SortKey),
     /// A change to the filter field.
     Filter(String),
     /// The table body scrolled to this offset in pixels.
@@ -112,12 +113,11 @@ fn open() -> anyhow::Result<(Library, Viewer)> {
         folder: library.folder.clone(),
         books: library.list()?,
         progress: library.progress()?,
-        sort: Sort::default(),
-        filter: String::new(),
+        query: Query::default(),
         scroll: 0.0,
         selected: None,
     };
-    Ok((library, Viewer::Open(open)))
+    Ok((library, Viewer::Open(Box::new(open))))
 }
 
 fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
@@ -139,19 +139,17 @@ fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
             });
         }
         Message::Close => open.selected = None,
-        Message::Sort(column) => {
-            if open.sort.column == column {
-                open.sort.descending = !open.sort.descending;
+        Message::Sort(key) => {
+            let sort = &mut open.query.sort;
+            if sort.keys == [key] {
+                sort.descending = !sort.descending;
             } else {
-                open.sort = Sort {
-                    column,
-                    descending: false,
-                };
+                *sort = Sort::by(key);
             }
         }
         Message::Filter(text) => {
             // A new filter shows its matches from the top.
-            open.filter = text;
+            open.query.filter.text = text;
             open.scroll = 0.0;
             return table::scroll_to_top();
         }
@@ -165,7 +163,7 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
     match viewer {
         Viewer::OpenFailed(error) => container(text(error)).padding(16).into(),
         Viewer::Open(open) => {
-            let rows = table::order(open);
+            let rows = open.query.select(&open.books, &open.progress);
             let shown = open.selected.as_ref().and_then(|s| {
                 let book = open.books.iter().find(|b| b.id == s.id)?;
                 Some((book, s))
@@ -193,17 +191,20 @@ fn books(n: usize) -> String {
 /// reads "4 of 23 books" while the filter is set.
 fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
     let total = open.books.len();
-    let count = if open.filter.trim().is_empty() {
+    let count = if open.query.filter.is_empty() {
         books(total)
     } else {
         format!("{shown} of {}", books(total))
     };
-    let filter = text_input("Filter by title, author, or series", &open.filter)
-        .on_input(Message::Filter)
-        .width(300)
-        .size(13)
-        .padding([5, 10])
-        .style(theme::filter);
+    let filter = text_input(
+        "Filter by title, author, or series",
+        &open.query.filter.text,
+    )
+    .on_input(Message::Filter)
+    .width(300)
+    .size(13)
+    .padding([5, 10])
+    .style(theme::filter);
     let bar = row![
         text("Library").size(14).font(SANS_SEMIBOLD),
         text(count).size(BODY).style(theme::text_color(|c| c.muted)),
@@ -217,17 +218,13 @@ fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
     column![bar, theme::hline()].into()
 }
 
-/// The status bar: the count, how many books are reading and finished,
-/// and the library folder.
+/// The status bar: the count, how many books are reading and finished by
+/// the progress row read last, and the library folder.
 fn status_bar(open: &Open) -> Element<'_, Message> {
     let has_status = |status: ReadStatus| {
         open.books
             .iter()
-            .filter(|b| {
-                open.progress
-                    .get(&b.id)
-                    .is_some_and(|rows| rows.iter().any(|p| p.status == status))
-            })
+            .filter(|b| query::status(&open.progress, b.id) == status)
             .count()
     };
     let counts = format!(

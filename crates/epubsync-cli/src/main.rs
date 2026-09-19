@@ -6,13 +6,14 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use epubsync_core::config::{self, Config};
 use epubsync_core::device::{Action, Device, ReadStatus, RowUpdate};
 use epubsync_core::kobo::eject::Ejected;
 use epubsync_core::kobo::{self, Kobo};
 use epubsync_core::library::{Book, Field, ImportOutcome, Library, ProgressRow};
 use epubsync_core::metadata::{Author, Metadata, Series, format_series_number};
+use epubsync_core::query::{Filter, Query, Sort, SortKey};
 use epubsync_core::sort_name::sort_name;
 use epubsync_core::sync::{self as core_sync, Gate};
 
@@ -38,8 +39,41 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
-    /// List every book with its id, metadata, and progress per device
-    List,
+    /// List the books with their id, metadata, and progress per device
+    List {
+        /// Show only the books with this text in the title, an author name, or the series name
+        text: Option<String>,
+        /// Show only the books with this text in the title
+        #[arg(long)]
+        title: Option<String>,
+        /// Show only the books with this text in an author name
+        #[arg(long)]
+        author: Option<String>,
+        /// Show only the books with this text in the series name
+        #[arg(long)]
+        series: Option<String>,
+        /// Show only the books being read, by the progress row read last
+        #[arg(long, group = "status")]
+        reading: bool,
+        /// Show only the finished books, by the progress row read last
+        #[arg(long, group = "status")]
+        finished: bool,
+        /// Show only the books not started on any device
+        #[arg(long, group = "status")]
+        unread: bool,
+        /// The order of the books. Several keys, as "author,title", break ties in turn. A book with no value for a key comes last
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            default_value = "id",
+            value_name = "KEY"
+        )]
+        sort: Vec<SortFlag>,
+        /// Reverse the order
+        #[arg(long)]
+        reverse: bool,
+    },
     /// Print one book's whole record, its stats, its file path, and its progress per device
     Show { book: i64 },
     /// Edit a book's metadata in $EDITOR, or one field per flag
@@ -97,6 +131,34 @@ enum Command {
     },
 }
 
+/// The `--sort` values, one per core sort key.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SortFlag {
+    Id,
+    Title,
+    Author,
+    Series,
+    Words,
+    Ease,
+    Progress,
+    LastRead,
+}
+
+impl From<SortFlag> for SortKey {
+    fn from(flag: SortFlag) -> SortKey {
+        match flag {
+            SortFlag::Id => SortKey::Id,
+            SortFlag::Title => SortKey::Title,
+            SortFlag::Author => SortKey::Author,
+            SortFlag::Series => SortKey::Series,
+            SortFlag::Words => SortKey::Words,
+            SortFlag::Ease => SortKey::Ease,
+            SortFlag::Progress => SortKey::Progress,
+            SortFlag::LastRead => SortKey::LastRead,
+        }
+    }
+}
+
 fn main() -> ExitCode {
     // Let a closed pipe end the process quietly, as in `list | head`,
     // instead of a panic on the next print.
@@ -127,7 +189,41 @@ fn run(command: Command) -> Result<()> {
     match command {
         Command::Init { .. } => unreachable!(),
         Command::Import { path, force } => import(&config, &path, force),
-        Command::List => list(&config),
+        Command::List {
+            text,
+            title,
+            author,
+            series,
+            reading,
+            finished,
+            unread,
+            sort,
+            reverse,
+        } => {
+            let status = if reading {
+                Some(ReadStatus::Reading)
+            } else if finished {
+                Some(ReadStatus::Finished)
+            } else if unread {
+                Some(ReadStatus::Unread)
+            } else {
+                None
+            };
+            let query = Query {
+                filter: Filter {
+                    text: text.unwrap_or_default(),
+                    title: title.unwrap_or_default(),
+                    author: author.unwrap_or_default(),
+                    series: series.unwrap_or_default(),
+                    status,
+                },
+                sort: Sort {
+                    keys: sort.into_iter().map(SortKey::from).collect(),
+                    descending: reverse,
+                },
+            };
+            list(&config, &query)
+        }
         Command::Show { book } => show(&config, book),
         Command::Edit {
             book,
@@ -215,11 +311,12 @@ fn import(config: &Config, path: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn list(config: &Config) -> Result<()> {
+fn list(config: &Config, query: &Query) -> Result<()> {
     let lib = Library::open(config)?;
+    let books = lib.list()?;
     let progress = lib.progress()?;
-    for book in lib.list()? {
-        let mut line = book_line(&book);
+    for book in query.select(&books, &progress) {
+        let mut line = book_line(book);
         for p in progress.get(&book.id).into_iter().flatten() {
             line.push_str(&format!("  {}", progress_cell(p)));
         }
@@ -282,11 +379,7 @@ fn progress_cell(p: &ProgressRow) -> String {
         ReadStatus::Reading => "reading",
         ReadStatus::Finished => "finished",
     };
-    let day = p
-        .last_read
-        .as_deref()
-        .map(|d| &d[..d.len().min(10)])
-        .unwrap_or("");
+    let day = p.day().unwrap_or("");
     format!("{}: {}% {status} {day}", p.device_serial, p.percent)
         .trim_end()
         .to_string()

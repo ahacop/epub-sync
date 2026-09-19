@@ -3,6 +3,7 @@ pub mod device;
 pub mod kepub;
 pub mod kobo;
 pub mod library;
+pub mod query;
 pub mod sort_name;
 pub mod stats;
 pub mod sync;

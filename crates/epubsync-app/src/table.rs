@@ -1,11 +1,11 @@
-//! The table of books: the columns, the sort and filter logic, and the
-//! table view.
+//! The table of books: the columns and the table view. Each column is one
+//! sort key of the core query, and a click on its header sorts by it.
 
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use epubsync_core::device::ReadStatus;
 use epubsync_core::library::{Book, ProgressRow};
+use epubsync_core::query::{self, Sort, SortKey};
 use iced::widget::{
     self, Text, button, column, container, progress_bar, responsive, row, scrollable, space, text,
 };
@@ -14,72 +14,43 @@ use iced::{Center, Element, Fill, Length, Right, Size, Task, padding};
 use crate::theme::{self, BODY, MONO, SANS_MEDIUM};
 use crate::{Message, Open, format};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Column {
-    Id,
-    Title,
-    Author,
-    Series,
-    Words,
-    Ease,
-    Progress,
-    LastRead,
-}
+/// The columns from left to right.
+const COLUMNS: [SortKey; 8] = [
+    SortKey::Id,
+    SortKey::Title,
+    SortKey::Author,
+    SortKey::Series,
+    SortKey::Words,
+    SortKey::Ease,
+    SortKey::Progress,
+    SortKey::LastRead,
+];
 
-impl Column {
-    /// The columns from left to right.
-    pub const ALL: [Column; 8] = [
-        Column::Id,
-        Column::Title,
-        Column::Author,
-        Column::Series,
-        Column::Words,
-        Column::Ease,
-        Column::Progress,
-        Column::LastRead,
-    ];
-
-    fn name(self) -> &'static str {
-        match self {
-            Column::Id => "ID",
-            Column::Title => "Title",
-            Column::Author => "Author",
-            Column::Series => "Series",
-            Column::Words => "Words",
-            Column::Ease => "Ease",
-            Column::Progress => "Progress",
-            Column::LastRead => "Last read",
-        }
-    }
-
-    /// The fixed columns take pixels; the text columns share the rest.
-    fn width(self) -> Length {
-        match self {
-            Column::Id => Length::Fixed(56.0),
-            Column::Title => Length::FillPortion(32),
-            Column::Author => Length::FillPortion(20),
-            Column::Series => Length::FillPortion(18),
-            Column::Words => Length::Fixed(88.0),
-            Column::Ease => Length::Fixed(64.0),
-            Column::Progress => Length::Fixed(200.0),
-            Column::LastRead => Length::Fixed(108.0),
-        }
+/// The header text of a column.
+fn name(column: SortKey) -> &'static str {
+    match column {
+        SortKey::Id => "ID",
+        SortKey::Title => "Title",
+        SortKey::Author => "Author",
+        SortKey::Series => "Series",
+        SortKey::Words => "Words",
+        SortKey::Ease => "Ease",
+        SortKey::Progress => "Progress",
+        SortKey::LastRead => "Last read",
     }
 }
 
-/// The sorted column and its direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Sort {
-    pub column: Column,
-    pub descending: bool,
-}
-
-impl Default for Sort {
-    fn default() -> Self {
-        Sort {
-            column: Column::Title,
-            descending: false,
-        }
+/// The fixed columns take pixels; the text columns share the rest.
+fn width(column: SortKey) -> Length {
+    match column {
+        SortKey::Id => Length::Fixed(56.0),
+        SortKey::Title => Length::FillPortion(32),
+        SortKey::Author => Length::FillPortion(20),
+        SortKey::Series => Length::FillPortion(18),
+        SortKey::Words => Length::Fixed(88.0),
+        SortKey::Ease => Length::Fixed(64.0),
+        SortKey::Progress => Length::Fixed(200.0),
+        SortKey::LastRead => Length::Fixed(108.0),
     }
 }
 
@@ -102,107 +73,13 @@ pub fn scroll_to_top() -> Task<Message> {
     widget::operation::scroll_to(table_id(), scrollable::AbsoluteOffset { x: 0.0, y: 0.0 })
 }
 
-/// The progress row with the greatest `last_read` for a book. A row
-/// without `last_read` counts as the oldest.
-pub fn latest(progress: &BTreeMap<i64, Vec<ProgressRow>>, book_id: i64) -> Option<&ProgressRow> {
-    progress
-        .get(&book_id)?
-        .iter()
-        .max_by_key(|p| p.last_read.as_deref())
-}
-
-/// The day part of a progress row's `last_read`.
-pub fn day_of(p: &ProgressRow) -> Option<&str> {
-    p.last_read.as_deref().map(|d| d.get(..10).unwrap_or(d))
-}
-
-/// The sort key of one book for one column. `None` means the book has no
-/// value in that column, and sorts after every book that has one.
-#[derive(Debug, PartialEq, PartialOrd)]
-enum Key {
-    Id(i64),
-    Title(String),
-    Author(String),
-    Series(String, Option<f64>),
-    Words(u64),
-    Ease(f64),
-    Percent(i64),
-    Day(String),
-}
-
-fn key(book: &Book, column: Column, progress: &BTreeMap<i64, Vec<ProgressRow>>) -> Option<Key> {
-    let m = &book.metadata;
-    match column {
-        Column::Id => Some(Key::Id(book.id)),
-        Column::Title => Some(Key::Title(format::title_key(&m.title))),
-        Column::Author => m
-            .authors
-            .first()
-            .map(|a| Key::Author(a.sort.to_lowercase())),
-        Column::Series => m
-            .series
-            .as_ref()
-            .map(|s| Key::Series(s.name.to_lowercase(), s.number)),
-        Column::Words => book.stats.word_count.map(Key::Words),
-        Column::Ease => book.stats.reading_ease.map(Key::Ease),
-        Column::Progress => latest(progress, book.id).map(|p| Key::Percent(p.percent)),
-        Column::LastRead => latest(progress, book.id)
-            .and_then(day_of)
-            .map(|d| Key::Day(d.to_string())),
-    }
-}
-
-/// Orders two keys. A missing key comes after every present key.
-fn compare(a: &Option<Key>, b: &Option<Key>) -> Ordering {
-    match (a, b) {
-        (Some(a), Some(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    }
-}
-
-/// Whether the filter text is in the title, an author name, or the
-/// series name. `needle` is already trimmed and in lower case.
-fn matches(book: &Book, needle: &str) -> bool {
-    let m = &book.metadata;
-    m.title.to_lowercase().contains(needle)
-        || m.authors
-            .iter()
-            .any(|a| a.name.to_lowercase().contains(needle))
-        || m.series
-            .as_ref()
-            .is_some_and(|s| s.name.to_lowercase().contains(needle))
-}
-
-/// The books the table shows, filtered and sorted. Ties keep id order.
-pub fn order(open: &Open) -> Vec<&Book> {
-    let needle = open.filter.trim().to_lowercase();
-    let mut rows: Vec<(Option<Key>, &Book)> = open
-        .books
-        .iter()
-        .filter(|b| needle.is_empty() || matches(b, &needle))
-        .map(|b| (key(b, open.sort.column, &open.progress), b))
-        .collect();
-    // The sort is stable, and the books are in id order.
-    rows.sort_by(|(a, _), (b, _)| {
-        let order = compare(a, b);
-        if open.sort.descending {
-            order.reverse()
-        } else {
-            order
-        }
-    });
-    rows.into_iter().map(|(_, b)| b).collect()
-}
-
 /// The table: the header row, then the rows in a scrollable column.
 pub fn view<'a>(open: &'a Open, rows: Vec<&'a Book>) -> Element<'a, Message> {
     let mut headers = row![space().width(MARK)]
         .height(theme::HEADER)
         .align_y(Center);
-    for column in Column::ALL {
-        headers = headers.push(header(column, open.sort));
+    for column in COLUMNS {
+        headers = headers.push(header(column, &open.query.sort));
     }
     let table = column![
         container(headers).style(theme::ground(|c| c.window)),
@@ -251,9 +128,9 @@ fn body<'a>(open: &'a Open, rows: &[&'a Book], size: Size) -> Element<'a, Messag
 /// The button gets the column's width itself. A button takes a plain fill
 /// from its content, not the fill portion, and the text headers would
 /// come out equal widths.
-fn header<'a>(column: Column, sort: Sort) -> Element<'a, Message> {
-    let sorted = sort.column == column;
-    let mut label = row![theme::label(column.name())].spacing(4).align_y(Center);
+fn header<'a>(column: SortKey, sort: &Sort) -> Element<'a, Message> {
+    let sorted = sort.keys.first() == Some(&column);
+    let mut label = row![theme::label(name(column))].spacing(4).align_y(Center);
     if sorted {
         let arrow = if sort.descending { "↓" } else { "↑" };
         label = label.push(theme::label(arrow).style(theme::text_color(|c| c.accent)));
@@ -266,7 +143,7 @@ fn header<'a>(column: Column, sort: Sort) -> Element<'a, Message> {
     };
     button(column![cell(label, column), mark])
         .on_press(Message::Sort(column))
-        .width(column.width())
+        .width(width(column))
         .height(Fill)
         .padding(0)
         .style(theme::header(sorted))
@@ -280,7 +157,7 @@ fn book_row<'a>(
     selected: bool,
 ) -> Element<'a, Message> {
     let m = &book.metadata;
-    let latest = latest(progress, book.id);
+    let latest = query::latest(progress, book.id);
 
     let mark = container(space()).width(MARK).height(Fill);
     let mark = if selected {
@@ -320,19 +197,24 @@ fn book_row<'a>(
             .unwrap_or_default(),
     )
     .style(theme::text_color(|c| c.muted));
-    let last_read = line(latest.and_then(day_of).map(format::day).unwrap_or_default())
-        .style(theme::text_color(|c| c.muted));
+    let last_read = line(
+        latest
+            .and_then(ProgressRow::day)
+            .map(format::day)
+            .unwrap_or_default(),
+    )
+    .style(theme::text_color(|c| c.muted));
 
     let cells = row![
         mark,
-        cell(id, Column::Id),
-        cell(title, Column::Title),
-        cell(author, Column::Author),
-        cell(series, Column::Series),
-        cell(words, Column::Words),
-        cell(ease, Column::Ease),
-        cell(progress_cell(latest), Column::Progress),
-        cell(last_read, Column::LastRead),
+        cell(id, SortKey::Id),
+        cell(title, SortKey::Title),
+        cell(author, SortKey::Author),
+        cell(series, SortKey::Series),
+        cell(words, SortKey::Words),
+        cell(ease, SortKey::Ease),
+        cell(progress_cell(latest), SortKey::Progress),
+        cell(last_read, SortKey::LastRead),
     ]
     .height(Fill)
     .align_y(Center);
@@ -357,14 +239,14 @@ fn line<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
 /// A cell: the column's width, the row's full height with the content
 /// centered in it, 12 px side padding, one line, clipped. The number
 /// columns are right-aligned.
-fn cell<'a>(content: impl Into<Element<'a, Message>>, column: Column) -> Element<'a, Message> {
+fn cell<'a>(content: impl Into<Element<'a, Message>>, column: SortKey) -> Element<'a, Message> {
     let mut cell = container(content)
-        .width(column.width())
+        .width(width(column))
         .height(Fill)
         .align_y(Center)
         .padding(padding::horizontal(12))
         .clip(true);
-    if matches!(column, Column::Id | Column::Words | Column::Ease) {
+    if matches!(column, SortKey::Id | SortKey::Words | SortKey::Ease) {
         cell = cell.align_x(Right);
     }
     cell.into()
@@ -406,205 +288,4 @@ pub fn chip<'a>(status: ReadStatus) -> Element<'a, Message> {
     .padding([1, 6])
     .style(theme::chip(status))
     .into()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use epubsync_core::library::{Book, ProgressRow, Stats};
-    use epubsync_core::metadata::{Author, Metadata, Series};
-
-    use super::*;
-
-    fn author(name: &str, sort: &str) -> Author {
-        Author {
-            name: name.into(),
-            sort: sort.into(),
-        }
-    }
-
-    fn book(
-        id: i64,
-        title: &str,
-        author: Option<Author>,
-        series: Option<Series>,
-        stats: Stats,
-    ) -> Book {
-        Book {
-            id,
-            revision: 1,
-            metadata: Metadata {
-                title: title.into(),
-                authors: author.into_iter().collect(),
-                series,
-                ..Metadata::default()
-            },
-            stats,
-        }
-    }
-
-    fn progress(percent: i64, status: ReadStatus, last_read: Option<&str>) -> ProgressRow {
-        ProgressRow {
-            device_serial: "N123".into(),
-            percent,
-            status,
-            last_read: last_read.map(|d| format!("{d}T10:00:00Z")),
-        }
-    }
-
-    /// Three books: The Warden (Trollope, Barsetshire 1, 62% reading,
-    /// 72,000 words, ease 61), Villette (Brontë, no series, no progress,
-    /// 196,000 words, ease 55), and A Princess of Mars (Burroughs,
-    /// Martian 1, 100% finished, no stats).
-    fn library() -> Open {
-        Open {
-            folder: PathBuf::from("/books"),
-            books: vec![
-                book(
-                    1,
-                    "The Warden",
-                    Some(author("Anthony Trollope", "Trollope, Anthony")),
-                    Some(Series {
-                        name: "Chronicles of Barsetshire".into(),
-                        number: Some(1.0),
-                    }),
-                    Stats {
-                        word_count: Some(72_000),
-                        reading_ease: Some(61.0),
-                    },
-                ),
-                book(
-                    2,
-                    "Villette",
-                    Some(author("Charlotte Brontë", "Brontë, Charlotte")),
-                    None,
-                    Stats {
-                        word_count: Some(196_000),
-                        reading_ease: Some(55.0),
-                    },
-                ),
-                book(
-                    3,
-                    "A Princess of Mars",
-                    Some(author("Edgar Rice Burroughs", "Burroughs, Edgar Rice")),
-                    Some(Series {
-                        name: "Martian".into(),
-                        number: Some(1.0),
-                    }),
-                    Stats::default(),
-                ),
-            ],
-            progress: BTreeMap::from([
-                (
-                    1,
-                    vec![progress(62, ReadStatus::Reading, Some("2026-09-08"))],
-                ),
-                (
-                    3,
-                    vec![progress(100, ReadStatus::Finished, Some("2026-05-12"))],
-                ),
-            ]),
-            sort: Sort::default(),
-            filter: String::new(),
-            scroll: 0.0,
-            selected: None,
-        }
-    }
-
-    fn ids(open: &Open) -> Vec<i64> {
-        order(open).iter().map(|b| b.id).collect()
-    }
-
-    #[test]
-    fn default_order_is_by_title_without_articles() {
-        let open = library();
-        // princess of mars, villette, warden
-        assert_eq!(ids(&open), vec![3, 2, 1]);
-    }
-
-    #[test]
-    fn descending_flips_the_order() {
-        let mut open = library();
-        open.sort.descending = true;
-        assert_eq!(ids(&open), vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn author_order_uses_the_sort_name() {
-        let mut open = library();
-        open.sort.column = Column::Author;
-        // Brontë, Burroughs, Trollope
-        assert_eq!(ids(&open), vec![2, 3, 1]);
-    }
-
-    #[test]
-    fn series_order_puts_a_book_without_a_series_last() {
-        let mut open = library();
-        open.sort.column = Column::Series;
-        // Chronicles of Barsetshire, Martian, then Villette
-        assert_eq!(ids(&open), vec![1, 3, 2]);
-    }
-
-    #[test]
-    fn words_order_puts_a_book_without_stats_last() {
-        let mut open = library();
-        open.sort.column = Column::Words;
-        // 72,000, 196,000, then A Princess of Mars
-        assert_eq!(ids(&open), vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn ease_order_puts_a_book_without_stats_last() {
-        let mut open = library();
-        open.sort.column = Column::Ease;
-        // 55, 61, then A Princess of Mars
-        assert_eq!(ids(&open), vec![2, 1, 3]);
-    }
-
-    #[test]
-    fn progress_order_puts_a_book_without_a_row_last() {
-        let mut open = library();
-        open.sort.column = Column::Progress;
-        // 62%, 100%, then Villette
-        assert_eq!(ids(&open), vec![1, 3, 2]);
-    }
-
-    #[test]
-    fn last_read_order_puts_a_book_without_a_row_last() {
-        let mut open = library();
-        open.sort.column = Column::LastRead;
-        // May, September, then Villette
-        assert_eq!(ids(&open), vec![3, 1, 2]);
-    }
-
-    #[test]
-    fn latest_row_is_the_one_read_last() {
-        let rows = BTreeMap::from([(
-            1,
-            vec![
-                progress(10, ReadStatus::Reading, None),
-                progress(62, ReadStatus::Reading, Some("2026-09-08")),
-                progress(30, ReadStatus::Reading, Some("2026-07-02")),
-            ],
-        )]);
-        assert_eq!(latest(&rows, 1).map(|p| p.percent), Some(62));
-        assert_eq!(latest(&rows, 2), None);
-    }
-
-    #[test]
-    fn filter_matches_an_author_name() {
-        let mut open = library();
-        open.filter = "bront".into();
-        assert_eq!(ids(&open), vec![2]);
-        open.filter = "  BURROUGHS ".into();
-        assert_eq!(ids(&open), vec![3]);
-    }
-
-    #[test]
-    fn filter_matches_a_series_name() {
-        let mut open = library();
-        open.filter = "barset".into();
-        assert_eq!(ids(&open), vec![1]);
-    }
 }

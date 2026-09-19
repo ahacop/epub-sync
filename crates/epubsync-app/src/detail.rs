@@ -165,7 +165,7 @@ fn field<'a>(label: &'a str, value: impl Into<Element<'a, Message>>) -> Element<
 /// One device's progress: the serial and the day, a full-width bar, then
 /// the percent and the status chip.
 fn device(p: &ProgressRow) -> Element<'_, Message> {
-    let when = match table::day_of(p) {
+    let when = match p.day() {
         Some(day) => format!("read {}", format::day(day)),
         None => "not opened".to_string(),
     };

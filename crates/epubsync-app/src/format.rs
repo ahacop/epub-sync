@@ -69,18 +69,6 @@ pub fn authors(authors: &[Author]) -> String {
     names.join(" & ")
 }
 
-/// The title in lower case without a leading "The ", "A ", or "An ", for
-/// the title sort.
-pub fn title_key(title: &str) -> String {
-    let lower = title.to_lowercase();
-    for article in ["the ", "a ", "an "] {
-        if let Some(rest) = lower.strip_prefix(article) {
-            return rest.to_string();
-        }
-    }
-    lower
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,14 +137,5 @@ mod tests {
         assert_eq!(reading_ease(92.0), "92, very easy");
         assert_eq!(reading_ease(59.6), "60, fairly difficult");
         assert_eq!(reading_ease(12.3), "12, very difficult");
-    }
-
-    #[test]
-    fn title_key_drops_a_leading_article() {
-        assert_eq!(title_key("The Warden"), "warden");
-        assert_eq!(title_key("A Princess of Mars"), "princess of mars");
-        assert_eq!(title_key("An Ideal Husband"), "ideal husband");
-        assert_eq!(title_key("Villette"), "villette");
-        assert_eq!(title_key("Theodore"), "theodore");
     }
 }
