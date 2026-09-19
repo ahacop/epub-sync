@@ -2,7 +2,9 @@
 //! selected, its details in a sidebar on the right. A Words tab swaps the
 //! table for the list of words looked up on a device. A Reload button
 //! reads the library again, and an Import button or a drop of files onto
-//! the window adds books. The CLI edits, removes, and syncs.
+//! the window adds books, with a strip under the toolbar that shows the
+//! progress and gives the table the added books. The CLI edits, removes,
+//! and syncs.
 
 mod description;
 mod detail;
@@ -24,7 +26,7 @@ use iced::keyboard::{self, key};
 use iced::widget::{button, column, container, markdown, row, space, text, text_input};
 use iced::{Center, Element, Fill, Subscription, Task, padding, window};
 
-use crate::import::{Handoff, Import, Line};
+use crate::import::{Handoff, Import, Line, Tab};
 use crate::theme::{BODY, MONO, SANS_SEMIBOLD};
 
 /// The state of the viewer window: what it draws.
@@ -65,8 +67,12 @@ struct Open {
     /// Why the last reload failed, if it did. The status bar shows it
     /// until a reload succeeds.
     error: Option<String>,
-    /// The import under way or last done, until the × clears it.
+    /// The import under way or last done, until the × clears it. While
+    /// it is shown, the books pane draws the rows of its tab in view.
     import: Option<Import>,
+    /// The query and the scroll offset from before the import, set aside
+    /// when a strip takes the pane and put back when the × clears it.
+    before: Option<(Query, f32)>,
     /// Whether files are held over the window in a drag.
     hovering: bool,
 }
@@ -112,7 +118,13 @@ enum Message {
     Dropped(PathBuf),
     /// The import task finished one file and hands the library back.
     Imported(Handoff, Line),
-    /// The × on the import strip.
+    /// The Cancel button on the import strip. The queued files are
+    /// dropped; the file in flight finishes.
+    CancelImport,
+    /// A click on a tab of the import strip.
+    ImportTab(Tab),
+    /// The × on the import strip. The pane goes back to the query and
+    /// the scroll offset from before the import.
     ClearImport,
     /// A click on a link in the description. It does nothing.
     LinkClicked,
@@ -178,6 +190,7 @@ impl Open {
             selected: None,
             error: None,
             import: None,
+            before: None,
             hovering: false,
         };
         open.read()?;
@@ -232,14 +245,32 @@ impl Open {
     /// that arrive while an import runs join its queue. Paths that
     /// arrive after one ended start a new strip in place of the old.
     fn import(&mut self, paths: &[PathBuf]) -> Task<Message> {
-        let import = match &mut self.import {
-            Some(import) if import.running() => import,
-            _ => self.import.insert(Import::default()),
-        };
+        let mut task = Task::none();
+        if !self.import.as_ref().is_some_and(Import::running) {
+            task = self.begin();
+        }
+        let import = self.import.as_mut().expect("the strip is in place");
         for path in paths {
             import.add(path);
         }
-        import.start(&mut self.library)
+        Task::batch([task, import.start(&mut self.library)])
+    }
+
+    /// Puts a new strip in place of the old and gives it the pane. The
+    /// query and the scroll offset go aside for the × to put back, unless
+    /// an earlier strip put them aside already. The pane starts at the
+    /// top, sorted by id, which is import order.
+    fn begin(&mut self) -> Task<Message> {
+        self.import = Some(Import::new());
+        if self.before.is_none() {
+            self.before = Some((std::mem::take(&mut self.query), self.scroll));
+        }
+        self.query = Query {
+            sort: Sort::by(SortKey::Id),
+            ..Query::default()
+        };
+        self.scroll = 0.0;
+        table::scroll_to_top()
     }
 }
 
@@ -294,7 +325,28 @@ fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
                 return import.start(&mut open.library);
             }
         }
-        Message::ClearImport => open.import = None,
+        Message::CancelImport => {
+            if let Some(import) = &mut open.import {
+                import.cancel();
+            }
+        }
+        Message::ImportTab(tab) => {
+            // Each tab shows its rows from the top, in the books pane.
+            if let Some(import) = &mut open.import {
+                import.show(tab);
+                open.pane = Pane::Books;
+                open.scroll = 0.0;
+                return table::scroll_to_top();
+            }
+        }
+        Message::ClearImport => {
+            open.import = None;
+            if let Some((query, scroll)) = open.before.take() {
+                open.query = query;
+                open.scroll = scroll;
+                return table::scroll_to(scroll);
+            }
+        }
         Message::LinkClicked => {}
     }
     Task::none()
@@ -305,11 +357,16 @@ fn view(viewer: &Viewer) -> Element<'_, Message> {
         Viewer::OpenFailed(error) => container(text(error)).padding(16).into(),
         Viewer::Open(open) => {
             let (pane, shown_count): (Element<'_, Message>, usize) = match open.pane {
-                Pane::Books => {
-                    let rows = open.query.select(&open.books, &open.progress);
-                    let n = rows.len();
-                    (table::view(open, rows), n)
-                }
+                // The import strip, while shown, gives the books pane the
+                // rows of its tab in view.
+                Pane::Books => match &open.import {
+                    Some(import) => import::pane(open, import),
+                    None => {
+                        let rows = open.query.select(&open.books, &open.progress);
+                        let n = rows.len();
+                        (table::view(open, rows), n)
+                    }
+                },
                 Pane::Words => {
                     let rows = words::select(&open.words, &open.query.filter.text);
                     let n = rows.len();

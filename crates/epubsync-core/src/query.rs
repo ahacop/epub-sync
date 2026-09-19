@@ -90,11 +90,12 @@ pub struct Query {
 }
 
 impl Query {
-    /// The books that meet the filter, in sort order. `books` is in id
-    /// order, which the sort keeps between equal keys.
+    /// The books that meet the filter, in sort order. The sort is stable,
+    /// so books with equal keys keep the order of `books`, which is the
+    /// id order for a library read.
     pub fn select<'a>(
         &self,
-        books: &'a [Book],
+        books: impl IntoIterator<Item = &'a Book>,
         progress: &BTreeMap<i64, Vec<ProgressRow>>,
     ) -> Vec<&'a Book> {
         let needles = Needles::from(&self.filter);
@@ -106,11 +107,10 @@ impl Query {
                 .collect()
         };
         let mut rows: Vec<(Vec<Option<Key>>, &Book)> = books
-            .iter()
+            .into_iter()
             .filter(|b| needles.matches(b, progress))
             .map(|b| (keys(b), b))
             .collect();
-        // The sort is stable, and the books are in id order.
         rows.sort_by(|(a, _), (b, _)| {
             let order = a
                 .iter()

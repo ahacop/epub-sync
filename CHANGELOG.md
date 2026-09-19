@@ -32,10 +32,17 @@ The viewer imports books. An Import button opens the system file picker
 on EPUB files, and files dropped onto the window import too, as does a
 folder, one level deep as with `epubsync import`. Each file goes through
 the same import as the CLI on a background task, so the window stays
-live while kepubify runs, and its row lands in the table as it finishes.
-A strip under the toolbar counts the files as they go and then lists
-every file that was skipped or failed. A skipped file is one whose title
-and first author are already in the library.
+live while kepubify runs. A strip under the toolbar shows the file in
+flight, a progress bar, and a Cancel button, which drops the queued
+files once the file in flight finishes. Under that line the strip has
+three tabs, Added, Skipped, and Failed, with their counts, and the table
+shows the rows of the tab in view in place of the library: the added
+books as they land, the library book each skipped file matched, or the
+failed files with their errors. A skipped file is one whose title and
+first author are already in the library. When the import ends, the
+strip reads "Imported 12 files in 1 min 14 s", and the × on it puts the
+table back to the sort, the filter, and the scroll from before the
+import.
 
 An import that fails after the conversion, and an edit whose zip rewrite
 fails partway, no longer leave a temp file in the library folder. Both

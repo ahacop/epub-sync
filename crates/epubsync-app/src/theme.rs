@@ -214,6 +214,16 @@ pub fn bar(status: ReadStatus) -> impl Fn(&Theme) -> progress_bar::Style {
     }
 }
 
+/// The import strip's progress bar: `accent` on a `line` track.
+pub fn import_bar(theme: &Theme) -> progress_bar::Style {
+    let c = colors(theme);
+    progress_bar::Style {
+        background: Background::Color(c.line),
+        bar: Background::Color(c.accent),
+        border: border::rounded(2),
+    }
+}
+
 /// A column header: no ground of its own. The label reads in `ink` on
 /// the sorted column and under the pointer, and in `muted` elsewhere.
 pub fn header(sorted: bool) -> impl Fn(&Theme, button::Status) -> button::Style {

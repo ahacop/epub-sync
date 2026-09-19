@@ -72,16 +72,7 @@ pub fn view<'a>(open: &'a Open, rows: Vec<&'a WordRow>) -> Element<'a, Message> 
     } else {
         responsive(move |size| body(open, &rows, size)).into()
     };
-    let pane = column![
-        container(headers).style(theme::ground(|c| c.window)),
-        theme::hline(),
-        body,
-    ];
-    container(pane)
-        .width(Fill)
-        .height(Fill)
-        .style(theme::ground(|c| c.surface))
-        .into()
+    table::frame(headers.into(), body)
 }
 
 fn body<'a>(open: &'a Open, rows: &[&'a WordRow], size: Size) -> Element<'a, Message> {

@@ -3,21 +3,28 @@
 //! because kepubify takes seconds per book and the measurement takes
 //! more. The task takes the `Library` value with it and hands it back
 //! with the outcome, so the state holds no library while a file imports.
-//! The book's row lands in the table after each file, and a strip under
-//! the toolbar shows the count so far and every file that was skipped or
-//! failed.
+//!
+//! A strip under the toolbar shows the file in flight, a progress bar, a
+//! Cancel button, and three tabs: Added, Skipped, Failed, each with its
+//! count. While the strip is shown, the main pane draws the rows of the
+//! tab in view in place of the library query: the added books, the
+//! library books the skipped files matched, or the failed files with
+//! their errors. The strip lists nothing itself, so its height is the
+//! same for one file and for a thousand.
 
 use std::collections::VecDeque;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use epubsync_core::library::{ImportOutcome, Library};
-use iced::widget::{button, column, container, row, scrollable, space, text};
+use iced::widget::{button, column, container, progress_bar, row, space, text};
 use iced::{Center, Element, Fill, Task, padding};
 
-use crate::theme::{BODY, MONO, SANS_MEDIUM};
-use crate::{Message, theme};
+use crate::table::file_name;
+use crate::theme::{BODY, MONO, SANS_MEDIUM, SANS_SEMIBOLD};
+use crate::{Message, Open, format, table, theme};
 
 /// A library value on its way back from the import task. A message must
 /// be Clone and Debug, and a Library is neither, so the task hands the
@@ -45,28 +52,83 @@ impl fmt::Debug for Handoff {
 /// What one file's import came to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Line {
-    /// The book is in the library.
-    Added { title: String },
+    /// The book is in the library as book `id`.
+    Added { id: i64 },
     /// A book with the same title and first author is already in the
     /// library, as book `id`.
-    Skipped { id: i64, file: PathBuf },
+    Skipped { id: i64 },
     /// The import failed. `error` is the whole error chain.
     Failed { file: PathBuf, error: String },
 }
 
+/// One of the strip's tabs. Each shows the lines of one kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Added,
+    Skipped,
+    Failed,
+}
+
+const TABS: [Tab; 3] = [Tab::Added, Tab::Skipped, Tab::Failed];
+
+impl Tab {
+    fn name(self) -> &'static str {
+        match self {
+            Tab::Added => "Added",
+            Tab::Skipped => "Skipped",
+            Tab::Failed => "Failed",
+        }
+    }
+
+    /// Whether a line belongs to this tab.
+    fn holds(self, line: &Line) -> bool {
+        matches!(
+            (self, line),
+            (Tab::Added, Line::Added { .. })
+                | (Tab::Skipped, Line::Skipped { .. })
+                | (Tab::Failed, Line::Failed { .. })
+        )
+    }
+}
+
 /// An import under way or done: the files still to go, the one in
-/// flight, and a line per file done.
-#[derive(Debug, Clone, Default)]
+/// flight, a line per file done, the tab in view, and when it started
+/// and ended.
+#[derive(Debug, Clone)]
 pub struct Import {
     queue: VecDeque<PathBuf>,
     current: Option<PathBuf>,
     lines: Vec<Line>,
+    tab: Tab,
+    started: Instant,
+    /// When the last file finished. None while files are to go.
+    ended: Option<Instant>,
+    /// Whether Cancel cut the queue short.
+    cancelled: bool,
 }
 
 impl Import {
+    /// An empty import, started now, on the Added tab.
+    pub fn new() -> Import {
+        Import {
+            queue: VecDeque::new(),
+            current: None,
+            lines: Vec::new(),
+            tab: Tab::Added,
+            started: Instant::now(),
+            ended: None,
+            cancelled: false,
+        }
+    }
+
     /// Whether a file is on the task now.
     pub fn running(&self) -> bool {
         self.current.is_some()
+    }
+
+    /// Puts a tab in view.
+    pub fn show(&mut self, tab: Tab) {
+        self.tab = tab;
     }
 
     /// Queues a path. A folder gives its `.epub` files one level deep,
@@ -92,12 +154,16 @@ impl Import {
 
     /// Starts the next queued file when none is in flight and the state
     /// holds the library. The task takes the library and gives it back
-    /// with the file's line in `Message::Imported`.
+    /// with the file's line in `Message::Imported`. With no file left to
+    /// start, the import ends here.
     pub fn start(&mut self, library: &mut Option<Library>) -> Task<Message> {
-        if self.current.is_some() || self.queue.is_empty() || library.is_none() {
+        if self.current.is_some() || library.is_none() {
             return Task::none();
         }
-        let file = self.queue.pop_front().expect("the queue is not empty");
+        let Some(file) = self.queue.pop_front() else {
+            self.ended.get_or_insert_with(Instant::now);
+            return Task::none();
+        };
         let mut lib = library.take().expect("the state holds the library");
         self.current = Some(file.clone());
         Task::perform(
@@ -114,20 +180,49 @@ impl Import {
         self.current = None;
         self.lines.push(line);
     }
+
+    /// Drops the queued files. The file in flight finishes, because
+    /// `Library::import` is one call, and then the import ends.
+    pub fn cancel(&mut self) {
+        self.queue.clear();
+        self.cancelled = true;
+    }
+
+    /// How many lines a tab holds.
+    fn count(&self, tab: Tab) -> usize {
+        self.lines.iter().filter(|l| tab.holds(l)).count()
+    }
+
+    /// The book ids of the Added or the Skipped tab, in import order.
+    /// The Failed tab has no books.
+    fn ids(&self, tab: Tab) -> impl Iterator<Item = i64> + '_ {
+        self.lines.iter().filter_map(move |line| match line {
+            Line::Added { id } | Line::Skipped { id } if tab.holds(line) => Some(*id),
+            _ => None,
+        })
+    }
+
+    /// The failed files and their errors, in import order.
+    fn failed(&self) -> Vec<(&Path, &str)> {
+        self.lines
+            .iter()
+            .filter_map(|line| match line {
+                Line::Failed { file, error } => Some((file.as_path(), error.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// How long the import took, or has taken so far.
+    fn elapsed(&self) -> Duration {
+        self.ended.unwrap_or_else(Instant::now) - self.started
+    }
 }
 
 fn import_one(lib: &mut Library, file: PathBuf) -> Line {
     match lib.import(&file, false) {
-        Ok(ImportOutcome::Imported { id, .. }) => {
-            // The title comes from the row the import made. If the read
-            // fails, the file name stands in.
-            let title = lib
-                .get(id)
-                .map(|b| b.metadata.title)
-                .unwrap_or_else(|_| file_name(&file));
-            Line::Added { title }
-        }
-        Ok(ImportOutcome::Exists { id }) => Line::Skipped { id, file },
+        Ok(ImportOutcome::Imported { id, .. }) => Line::Added { id },
+        Ok(ImportOutcome::Exists { id }) => Line::Skipped { id },
         Err(e) => Line::Failed {
             file,
             error: format!("{e:#}"),
@@ -161,108 +256,140 @@ pub fn pick() -> Task<Message> {
     })
 }
 
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
+/// "Imported 12 files in 1 min 14 s", or "Cancelled after 4 files in
+/// 20 s" when Cancel cut the queue short. The count is every file that
+/// went through, whatever it came to; the tabs break it down.
+fn summary(import: &Import) -> String {
+    let files = crate::count(import.lines.len(), "file");
+    let took = format::elapsed(import.elapsed());
+    if import.cancelled {
+        format!("Cancelled after {files} in {took}")
+    } else {
+        format!("Imported {files} in {took}")
+    }
 }
 
-/// "Imported 10 books · 1 skipped · 2 failed". A count of zero is left
-/// out, so an import with nothing skipped or failed reads "Imported 10
-/// books".
-fn summary(lines: &[Line]) -> String {
-    let added = lines
-        .iter()
-        .filter(|l| matches!(l, Line::Added { .. }))
-        .count();
-    let skipped = lines
-        .iter()
-        .filter(|l| matches!(l, Line::Skipped { .. }))
-        .count();
-    let failed = lines
-        .iter()
-        .filter(|l| matches!(l, Line::Failed { .. }))
-        .count();
-    let mut parts = vec![format!("Imported {}", crate::count(added, "book"))];
-    if skipped > 0 {
-        parts.push(format!("{skipped} skipped"));
-    }
-    if failed > 0 {
-        parts.push(format!("{failed} failed"));
-    }
-    parts.join(" · ")
-}
-
-/// The strip under the toolbar. While a file is in flight it reads
-/// "Importing 3 of 12 · pride.epub". When the queue is done it reads the
-/// summary, with a line for each skipped or failed file under it and a ×
-/// that clears the strip. Added books need no line: their rows are in
-/// the table.
+/// The strip under the toolbar. While a file is in flight the first line
+/// reads "Importing 3 of 12 · pride.epub" with a Cancel button, and a
+/// progress bar sits under it. When the queue is done the first line
+/// reads the summary with a × that clears the strip. The tabs come last
+/// in both cases.
 pub fn view(import: &Import) -> Element<'_, Message> {
-    let head: Element<'_, Message> = match &import.current {
+    let done = import.lines.len();
+    let mut body = column![].spacing(6);
+    match &import.current {
         Some(file) => {
-            let n = import.lines.len() + 1;
+            let n = done + 1;
             let total = n + import.queue.len();
-            row![
-                text(format!("Importing {n} of {total}"))
-                    .size(BODY)
-                    .font(SANS_MEDIUM),
+            let word = if import.cancelled {
+                "Cancelling".to_string()
+            } else {
+                format!("Importing {n} of {total}")
+            };
+            let cancel = button(text("Cancel").size(13))
+                .on_press_maybe((!import.cancelled).then_some(Message::CancelImport))
+                .padding([5, 10])
+                .style(theme::action);
+            let head = row![
+                text(word).size(BODY).font(SANS_MEDIUM),
                 text(file_name(file))
                     .size(BODY)
                     .style(theme::text_color(|c| c.muted)),
+                space().width(Fill),
+                cancel,
             ]
             .spacing(10)
-            .into()
+            .align_y(Center);
+            let bar = progress_bar(0.0..=total as f32, done as f32)
+                .girth(4)
+                .style(theme::import_bar);
+            body = body
+                .push(head)
+                .push(container(bar).padding(padding::top(2).right(6)));
         }
         None => {
             let close = button(container(text("×").size(15)).center(22))
                 .on_press(Message::ClearImport)
                 .padding(0)
                 .style(theme::close);
-            row![
-                text(summary(&import.lines)).size(BODY).font(SANS_MEDIUM),
+            let head = row![
+                text(summary(import)).size(BODY).font(SANS_MEDIUM),
                 space().width(Fill),
                 close,
             ]
-            .align_y(Center)
-            .into()
+            .align_y(Center);
+            body = body.push(head);
         }
-    };
-    let notes = import.lines.iter().filter_map(|line| match line {
-        Line::Added { .. } => None,
-        Line::Skipped { id, file } => Some(note(
-            "Skipped",
-            file,
-            format!("already in the library as book {id}"),
-        )),
-        Line::Failed { file, error } => Some(note("Failed", file, error.clone())),
-    });
-    let body = column![head]
-        .push(scrollable(column(notes).spacing(2)))
-        .spacing(6)
-        .padding(padding::all(10).left(14).right(8));
+    }
+    let tabs = row(TABS.map(|t| tab(import, t)))
+        .spacing(18)
+        .align_y(Center)
+        .padding(padding::top(2));
+    body = body.push(tabs);
     column![
         container(body)
             .width(Fill)
-            .max_height(180)
+            .padding(padding::all(10).left(14).right(8))
             .style(theme::ground(|c| c.window)),
         theme::hline(),
     ]
     .into()
 }
 
-/// One note line: the word, the file name, and what happened.
-fn note<'a>(word: &'a str, file: &Path, what: String) -> Element<'a, Message> {
-    row![
-        text(word)
-            .size(12)
-            .width(52)
-            .style(theme::text_color(|c| c.muted)),
-        text(file_name(file)).size(12).font(MONO),
-        text(what).size(12).style(theme::text_color(|c| c.ink_2)),
-    ]
-    .spacing(8)
+/// One tab: the name, its count in the monospace face, and on the tab in
+/// view a 2 px `accent` mark along the bottom edge, the same mark the
+/// sorted column header wears.
+fn tab<'a>(import: &Import, tab: Tab) -> Element<'a, Message> {
+    let active = import.tab == tab;
+    let count = text(import.count(tab).to_string())
+        .size(12)
+        .font(MONO)
+        .style(if active {
+            theme::text_color(|c| c.ink_2)
+        } else {
+            theme::text_color(|c| c.faint)
+        });
+    let label = row![text(tab.name()).size(13).font(SANS_SEMIBOLD), count]
+        .spacing(6)
+        .align_y(Center);
+    let mark = container(space()).width(Fill).height(2);
+    let mark = if active {
+        mark.style(theme::ground(|c| c.accent))
+    } else {
+        mark
+    };
+    button(column![
+        container(label).padding(padding::vertical(2)),
+        mark
+    ])
+    .on_press(Message::ImportTab(tab))
+    .padding(0)
+    .style(theme::tab(active))
     .into()
+}
+
+/// The main pane while the strip is shown: the rows of the tab in view,
+/// and their count for the toolbar. The Added and the Skipped tabs put
+/// their library books through the query, so the headers sort them and
+/// the filter field narrows them. The Failed tab lists the files.
+pub fn pane<'a>(open: &'a Open, import: &'a Import) -> (Element<'a, Message>, usize) {
+    match import.tab {
+        Tab::Failed => {
+            let rows = import.failed();
+            let n = rows.len();
+            (table::failed_view(open, rows), n)
+        }
+        tab => {
+            // The books are in id order, so a binary search finds each.
+            let books = import.ids(tab).filter_map(|id| {
+                let i = open.books.binary_search_by_key(&id, |b| b.id).ok()?;
+                Some(&open.books[i])
+            });
+            let rows = open.query.select(books, &open.progress);
+            let n = rows.len();
+            (table::view(open, rows), n)
+        }
+    }
 }
 
 /// The strip while files hover over the window with no import in view.
@@ -288,13 +415,8 @@ mod tests {
 
     fn line(kind: u8) -> Line {
         match kind {
-            0 => Line::Added {
-                title: "A".to_string(),
-            },
-            1 => Line::Skipped {
-                id: 4,
-                file: PathBuf::from("a.epub"),
-            },
+            0 => Line::Added { id: 7 },
+            1 => Line::Skipped { id: 4 },
             _ => Line::Failed {
                 file: PathBuf::from("b.epub"),
                 error: "bad".to_string(),
@@ -302,14 +424,60 @@ mod tests {
         }
     }
 
+    fn with_lines(kinds: &[u8]) -> Import {
+        let mut import = Import::new();
+        import.lines = kinds.iter().map(|&k| line(k)).collect();
+        import
+    }
+
     #[test]
-    fn summary_counts_each_kind_and_drops_zeros() {
-        assert_eq!(summary(&[]), "Imported 0 books");
-        assert_eq!(summary(&[line(0)]), "Imported 1 book");
-        assert_eq!(
-            summary(&[line(0), line(0), line(1), line(2), line(2)]),
-            "Imported 2 books · 1 skipped · 2 failed"
-        );
+    fn summary_counts_every_file_and_says_when_cancelled() {
+        let mut import = with_lines(&[]);
+        import.ended = Some(import.started + Duration::from_secs(74));
+        assert_eq!(summary(&import), "Imported 0 files in 1 min 14 s");
+        let mut import = with_lines(&[0]);
+        import.ended = Some(import.started + Duration::from_secs(3));
+        assert_eq!(summary(&import), "Imported 1 file in 3 s");
+        let mut import = with_lines(&[0, 0, 1, 2, 2]);
+        import.ended = Some(import.started + Duration::from_secs(20));
+        import.cancelled = true;
+        assert_eq!(summary(&import), "Cancelled after 5 files in 20 s");
+    }
+
+    #[test]
+    fn each_tab_holds_its_own_lines() {
+        let import = with_lines(&[0, 0, 1, 2, 2, 2]);
+        assert_eq!(import.count(Tab::Added), 2);
+        assert_eq!(import.count(Tab::Skipped), 1);
+        assert_eq!(import.count(Tab::Failed), 3);
+        assert_eq!(import.ids(Tab::Added).collect::<Vec<_>>(), [7, 7]);
+        assert_eq!(import.ids(Tab::Skipped).collect::<Vec<_>>(), [4]);
+        assert_eq!(import.ids(Tab::Failed).count(), 0);
+        assert_eq!(import.failed().len(), 3);
+        assert_eq!(import.failed()[0], (Path::new("b.epub"), "bad"));
+    }
+
+    #[test]
+    fn cancel_drops_the_queue_and_keeps_the_file_in_flight() {
+        let mut import = Import::new();
+        import.queue.extend(["a.epub", "b.epub"].map(PathBuf::from));
+        import.current = Some(PathBuf::from("c.epub"));
+        import.cancel();
+        assert!(import.queue.is_empty());
+        assert!(import.running());
+        assert!(import.cancelled);
+        assert!(import.ended.is_none());
+    }
+
+    #[test]
+    fn start_with_nothing_to_go_ends_the_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut library = Some(Library::init(&dir.path().join("library")).unwrap());
+        let mut import = Import::new();
+        assert!(import.ended.is_none());
+        let _ = import.start(&mut library);
+        assert!(import.ended.is_some());
+        assert!(library.is_some());
     }
 
     #[test]
@@ -321,7 +489,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/c.epub"), b"").unwrap();
 
-        let mut import = Import::default();
+        let mut import = Import::new();
         import.add(&dir.path().join("notes.txt"));
         import.add(dir.path());
         let queued: Vec<PathBuf> = import.queue.iter().cloned().collect();
@@ -339,7 +507,7 @@ mod tests {
     #[test]
     fn add_of_an_empty_folder_is_a_failed_line() {
         let dir = tempfile::tempdir().unwrap();
-        let mut import = Import::default();
+        let mut import = Import::new();
         import.add(dir.path());
         assert!(import.queue.is_empty());
         assert_eq!(
@@ -369,19 +537,8 @@ mod library_tests {
         let junk = dir.path().join("junk.epub");
         std::fs::write(&junk, b"not a zip").unwrap();
 
-        assert_eq!(
-            import_one(&mut lib, epub.clone()),
-            Line::Added {
-                title: "The Left Hand of Darkness".to_string()
-            }
-        );
-        assert_eq!(
-            import_one(&mut lib, epub.clone()),
-            Line::Skipped {
-                id: 1,
-                file: epub.clone()
-            }
-        );
+        assert_eq!(import_one(&mut lib, epub.clone()), Line::Added { id: 1 });
+        assert_eq!(import_one(&mut lib, epub.clone()), Line::Skipped { id: 1 });
         let Line::Failed { file, error } = import_one(&mut lib, junk.clone()) else {
             panic!("junk imported");
         };

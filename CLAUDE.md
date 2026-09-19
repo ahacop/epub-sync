@@ -122,6 +122,10 @@ knows the mode. The fonts are embedded from `fonts/`.
 messages must be `Clone`, so the task takes the `Library` value and hands
 it back inside `Handoff`, and the state holds `None` in between. Reload is
 off while the library is away. A write from the viewer ends with a reload.
+While the import strip is shown, the books pane draws the rows of the
+strip's tab (Added, Skipped, Failed) through the same query, and `Open`
+keeps the query and the scroll offset from before the import in `before`
+until the × puts them back.
 
 ## Versions and releases
 

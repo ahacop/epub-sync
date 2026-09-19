@@ -1,6 +1,6 @@
 //! The small text formatters the panes share.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use epubsync_core::device::ReadStatus;
 use epubsync_core::metadata::{Author, Series, format_series_number};
@@ -17,6 +17,22 @@ pub fn day(date: &str) -> String {
     match (month, day) {
         (Some(m), Some(d)) if (1..=12).contains(&m) => format!("{d} {}", MONTHS[m - 1]),
         _ => date.to_string(),
+    }
+}
+
+/// A time taken, in whole seconds: "8 s", "1 min 14 s", "2 h 5 min". The
+/// largest unit leads, and one smaller unit follows unless it is zero.
+pub fn elapsed(d: Duration) -> String {
+    let secs = d.as_secs();
+    let (big, big_unit, small, small_unit) = match secs {
+        s if s < 60 => return format!("{s} s"),
+        s if s < 3600 => (s / 60, "min", s % 60, "s"),
+        s => (s / 3600, "h", (s % 3600) / 60, "min"),
+    };
+    if small == 0 {
+        format!("{big} {big_unit}")
+    } else {
+        format!("{big} {big_unit} {small} {small_unit}")
     }
 }
 
@@ -111,6 +127,16 @@ fn year_of_days(days: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elapsed_leads_with_the_largest_unit() {
+        assert_eq!(elapsed(Duration::from_secs(0)), "0 s");
+        assert_eq!(elapsed(Duration::from_secs(59)), "59 s");
+        assert_eq!(elapsed(Duration::from_secs(60)), "1 min");
+        assert_eq!(elapsed(Duration::from_secs(74)), "1 min 14 s");
+        assert_eq!(elapsed(Duration::from_secs(3600)), "1 h");
+        assert_eq!(elapsed(Duration::from_secs(7500)), "2 h 5 min");
+    }
 
     #[test]
     fn duration_rounds_down_to_minutes() {

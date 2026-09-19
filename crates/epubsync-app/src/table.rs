@@ -1,7 +1,10 @@
 //! The table of books: the columns and the table view. Each column is one
-//! sort key of the core query, and a click on its header sorts by it.
+//! sort key of the core query, and a click on its header sorts by it. The
+//! import's failed table, a file and an error per row, is here too, since
+//! it shares the row height and the frame.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use epubsync_core::device::ReadStatus;
 use epubsync_core::library::{Book, ProgressRow};
@@ -62,8 +65,8 @@ const MARK: f32 = 3.0;
 
 /// The height of one row, and the pitch from one row to the next: the
 /// row and the 1 px line under it. The table builds only the rows in
-/// view, and the pitch tells it which rows those are. The words pane
-/// shares both.
+/// view, and the pitch tells it which rows those are. The words pane and
+/// the failed table share both.
 pub const ROW: f32 = 34.0;
 const PITCH: f32 = ROW + 1.0;
 
@@ -71,10 +74,15 @@ fn table_id() -> widget::Id {
     widget::Id::new("table")
 }
 
-/// Scrolls the table body, or the words pane's, to the top. The two
-/// share one widget id, since only one of them is in the window.
+/// Scrolls the pane in the main area to `offset` pixels from the top.
+/// The table, the words pane, and the import's failed table share one
+/// widget id, since only one of them is in the window.
+pub fn scroll_to(offset: f32) -> Task<Message> {
+    widget::operation::scroll_to(table_id(), scrollable::AbsoluteOffset { x: 0.0, y: offset })
+}
+
 pub fn scroll_to_top() -> Task<Message> {
-    widget::operation::scroll_to(table_id(), scrollable::AbsoluteOffset { x: 0.0, y: 0.0 })
+    scroll_to(0.0)
 }
 
 /// The table: the header row, then the rows in a scrollable column.
@@ -85,16 +93,73 @@ pub fn view<'a>(open: &'a Open, rows: Vec<&'a Book>) -> Element<'a, Message> {
     for column in COLUMNS {
         headers = headers.push(header(column, &open.query.sort));
     }
-    let table = column![
+    frame(
+        headers.into(),
+        responsive(move |size| body(open, &rows, size)),
+    )
+}
+
+/// A pane in the main area: the header row on the window ground, a line,
+/// and the body on the surface ground, filling the area.
+pub fn frame<'a>(
+    headers: Element<'a, Message>,
+    body: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let pane = column![
         container(headers).style(theme::ground(|c| c.window)),
         theme::hline(),
-        responsive(move |size| body(open, &rows, size)),
+        body.into(),
     ];
-    container(table)
+    container(pane)
         .width(Fill)
         .height(Fill)
         .style(theme::ground(|c| c.surface))
         .into()
+}
+
+/// The width of the File column of the failed table.
+const FILE: f32 = 320.0;
+
+/// The import's failed table: a File column and an Error column, one row
+/// per file, at the book row height. The rows are not buttons: there is
+/// no book to select.
+pub fn failed_view<'a>(open: &'a Open, rows: Vec<(&'a Path, &'a str)>) -> Element<'a, Message> {
+    let head = |name: &'static str, width: Length| {
+        cell(
+            theme::label(name).style(theme::text_color(|c| c.muted)),
+            width,
+        )
+    };
+    let headers = row![
+        space().width(MARK),
+        head("File", Length::Fixed(FILE)),
+        head("Error", Fill),
+    ]
+    .height(theme::HEADER)
+    .align_y(Center);
+    let body =
+        responsive(move |size| self::rows(open.scroll, size, rows.len(), |i| failed_row(rows[i])));
+    frame(headers.into(), body)
+}
+
+fn failed_row<'a>((file, error): (&'a Path, &'a str)) -> Element<'a, Message> {
+    let file = line(file_name(file)).font(MONO).size(12);
+    let error = line(error).style(theme::text_color(|c| c.ink_2));
+    let cells = row![
+        space().width(MARK),
+        cell(file, Length::Fixed(FILE)),
+        cell(error, Fill),
+    ]
+    .height(Fill)
+    .align_y(Center);
+    column![container(cells).width(Fill).height(ROW), theme::hline()].into()
+}
+
+/// The last part of a path, or the whole path when it has none.
+pub fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// The table body: the rows the query selected, built through `rows`.
