@@ -239,6 +239,13 @@ pub fn header(sorted: bool) -> impl Fn(&Theme, button::Status) -> button::Style 
     }
 }
 
+/// A path that opens something when clicked, such as the sidebar's file
+/// path: no ground of its own. It reads in `muted`, and in `ink` under
+/// the pointer, the same as a column header.
+pub fn link(theme: &Theme, status: button::Status) -> button::Style {
+    header(false)(theme, status)
+}
+
 /// A toolbar tab: no ground of its own. The name reads in `ink` while
 /// its pane is in view and under the pointer, and in `muted` elsewhere,
 /// the same as a column header.

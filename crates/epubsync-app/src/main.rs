@@ -3,8 +3,9 @@
 //! table for the list of words looked up on a device. A Reload button
 //! reads the library again, and an Import button or a drop of files onto
 //! the window adds books, with a strip under the toolbar that shows the
-//! progress and gives the table the added books. The CLI edits, removes,
-//! and syncs.
+//! progress and gives the table the added books. The file path, the
+//! folder path, and the links in a description open in the system file
+//! manager or the browser. The CLI edits, removes, and syncs.
 
 mod description;
 mod detail;
@@ -64,8 +65,8 @@ struct Open {
     scroll: f32,
     /// The book in the sidebar, if any.
     selected: Option<Selected>,
-    /// Why the last reload failed, if it did. The status bar shows it
-    /// until a reload succeeds.
+    /// The last reload or open that failed, as one sentence. The status
+    /// bar shows it until a reload succeeds.
     error: Option<String>,
     /// The import under way or last done, until the × clears it. While
     /// it is shown, the books pane draws the rows of its tab in view.
@@ -126,8 +127,17 @@ enum Message {
     /// The × on the import strip. The pane goes back to the query and
     /// the scroll offset from before the import.
     ClearImport,
-    /// A click on a link in the description. It does nothing.
-    LinkClicked,
+    /// A click on the sidebar's file path. The system file manager
+    /// shows the file.
+    Reveal(PathBuf),
+    /// A click on the status bar's folder path. The system file manager
+    /// opens the library folder.
+    OpenFolder,
+    /// A click on a link in the description. The browser opens it.
+    OpenLink(String),
+    /// The file manager or the browser could not be reached. The status
+    /// bar shows why.
+    OpenFailed(String),
 }
 
 fn main() -> iced::Result {
@@ -222,7 +232,7 @@ impl Open {
     /// while the window is open. A write from the viewer ends with a
     /// reload.
     fn reload(&mut self) {
-        self.error = self.read().err().map(|e| format!("{e:#}"));
+        self.error = self.read().err().map(|e| format!("Reload failed: {e:#}"));
         if let Some(id) = self.selected.as_ref().map(|s| s.id) {
             self.select(id);
         }
@@ -347,9 +357,33 @@ fn update(viewer: &mut Viewer, message: Message) -> Task<Message> {
                 return table::scroll_to(scroll);
             }
         }
-        Message::LinkClicked => {}
+        Message::Reveal(path) => {
+            return launch("show the file", move || opener::reveal(path));
+        }
+        Message::OpenFolder => {
+            let folder = open.folder.clone();
+            return launch("open the folder", move || opener::open(folder));
+        }
+        Message::OpenLink(uri) => {
+            return launch("open the link", move || opener::open_browser(uri));
+        }
+        Message::OpenFailed(error) => open.error = Some(error),
     }
     Task::none()
+}
+
+/// Runs one of the `opener` calls on a background task, because on macOS
+/// they wait for the `open` command to exit. A failure comes back as
+/// `Message::OpenFailed`, worded "Could not show the file: …"; a success
+/// sends nothing.
+fn launch(
+    what: &'static str,
+    call: impl FnOnce() -> Result<(), opener::OpenError> + Send + 'static,
+) -> Task<Message> {
+    Task::future(async move { call() }).then(move |result| match result {
+        Ok(()) => Task::none(),
+        Err(e) => Task::done(Message::OpenFailed(format!("Could not {what}: {e}"))),
+    })
 }
 
 fn view(viewer: &Viewer) -> Element<'_, Message> {
@@ -461,7 +495,8 @@ fn toolbar<'a>(open: &'a Open, shown: usize) -> Element<'a, Message> {
 /// The status bar: the count, how many books are reading and finished by
 /// the progress row read last, how many were finished this year by
 /// their finished date, and the library folder. The error of a failed
-/// reload takes the place of the counts.
+/// reload or open takes the place of the counts. A click on the
+/// folder opens it in the system file manager.
 fn status_bar(open: &Open) -> Element<'_, Message> {
     let has_status = |status: ReadStatus| {
         open.books
@@ -476,9 +511,7 @@ fn status_bar(open: &Open) -> Element<'_, Message> {
         .filter(|b| query::finished(&open.progress, b.id).is_some_and(|d| d.starts_with(&year)))
         .count();
     let counts = match &open.error {
-        Some(error) => text(format!("Reload failed: {error}"))
-            .size(11.5)
-            .style(theme::text_color(|c| c.ink)),
+        Some(error) => text(error).size(11.5).style(theme::text_color(|c| c.ink)),
         None => text(format!(
             "{} reading · {} finished · {this_year} this year",
             has_status(ReadStatus::Reading),
@@ -493,11 +526,15 @@ fn status_bar(open: &Open) -> Element<'_, Message> {
             .style(theme::text_color(|c| c.muted)),
         counts,
         space().width(Fill),
-        text(open.folder.display().to_string())
-            .font(MONO)
-            .size(11)
-            .wrapping(text::Wrapping::None)
-            .style(theme::text_color(|c| c.muted)),
+        button(
+            text(open.folder.display().to_string())
+                .font(MONO)
+                .size(11)
+                .wrapping(text::Wrapping::None)
+        )
+        .on_press(Message::OpenFolder)
+        .padding(0)
+        .style(theme::link),
     ]
     .spacing(18)
     .align_y(Center)

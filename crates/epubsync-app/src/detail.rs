@@ -104,8 +104,7 @@ fn body<'a>(open: &'a Open, book: &'a Book, selected: &'a Selected) -> Element<'
             .style(theme::text_color(|c| c.faint))
             .into()
     } else {
-        markdown::view(&selected.description, description_settings())
-            .map(|_uri| Message::LinkClicked)
+        markdown::view(&selected.description, description_settings()).map(Message::OpenLink)
     };
 
     let mut devices = column![heading("ON DEVICE")].spacing(8);
@@ -246,18 +245,22 @@ fn description_settings() -> markdown::Settings {
     markdown::Settings::with_text_size(15.5, style)
 }
 
-/// The full file path on one line, clipped.
+/// The full file path on one line, clipped. A click on it shows the file
+/// in the system file manager.
 fn footer<'a>(open: &'a Open, book: &'a Book) -> Element<'a, Message> {
     let path = open.folder.join(book_file_name(book.id));
-    container(
+    let show = button(
         text(path.display().to_string())
             .font(MONO)
             .size(11)
-            .wrapping(text::Wrapping::None)
-            .style(theme::text_color(|c| c.muted)),
+            .wrapping(text::Wrapping::None),
     )
-    .width(Fill)
-    .padding([8.0, INSET])
-    .clip(true)
-    .into()
+    .on_press(Message::Reveal(path))
+    .padding(0)
+    .style(theme::link);
+    container(show)
+        .width(Fill)
+        .padding([8.0, INSET])
+        .clip(true)
+        .into()
 }

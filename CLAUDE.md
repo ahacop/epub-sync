@@ -127,6 +127,11 @@ strip's tab (Added, Skipped, Failed) through the same query, and `Open`
 keeps the query and the scroll offset from before the import in `before`
 until the × puts them back.
 
+The file path, the folder path, and the description links go through the
+`opener` crate on a background task, because on macOS `open` waits for
+the command to exit. A failure lands in `Open.error`, which the status
+bar shows.
+
 ## Versions and releases
 
 The CLI's `build.rs` sets the printed version from `git describe`, so a

@@ -44,6 +44,13 @@ strip reads "Imported 12 files in 1 min 14 s", and the × on it puts the
 table back to the sort, the filter, and the scroll from before the
 import.
 
+The viewer opens paths and links. A click on the file path in the
+sidebar footer shows the file in the system file manager, a click on the
+folder path in the status bar opens the library folder, and a link in a
+description opens in the browser. Before, a link click did nothing.
+Should the file manager or the browser fail to start, the status bar
+says why.
+
 An import that fails after the conversion, and an edit whose zip rewrite
 fails partway, no longer leave a temp file in the library folder. Both
 now build in a temp file that is removed when the step returns an
