@@ -38,7 +38,7 @@ release.
 `just cli <args>` runs the command from the working tree, and a bare `just`
 lists the recipes.
 
-Full changelog: https://github.com/ahacop/epub-sync/compare/v0.1.6...v0.1.7
+Full changelog: https://github.com/ahacop/epubsync/compare/v0.1.6...v0.1.7
 
 ## 0.1.6 (2026-09-14)
 
@@ -55,4 +55,4 @@ binary, not an app bundle, so it does not appear in Launchpad or Spotlight.
 The release tarball for Apple Silicon now contains both binaries. Each one
 needs no other program on `PATH`.
 
-Full changelog: https://github.com/ahacop/epub-sync/compare/v0.1.5...v0.1.6
+Full changelog: https://github.com/ahacop/epubsync/compare/v0.1.5...v0.1.6

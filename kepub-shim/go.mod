@@ -1,4 +1,4 @@
-module github.com/ahacop/epub-sync/kepub-shim
+module github.com/ahacop/epubsync/kepub-shim
 
 go 1.26.7
 

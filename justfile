@@ -61,10 +61,10 @@ release version:
 
     # 3. Wait for the release workflow to publish the macOS tarball.
     #    The build takes several minutes.
-    echo "waiting for the release workflow: https://github.com/ahacop/epub-sync/actions"
+    echo "waiting for the release workflow: https://github.com/ahacop/epubsync/actions"
     sha=""
     for _ in $(seq 1 90); do
-        sha=$(gh release download "v$version" --repo ahacop/epub-sync --pattern SHA256SUMS --output - 2>/dev/null | cut -d' ' -f1) && [ ${#sha} -eq 64 ] && break
+        sha=$(gh release download "v$version" --repo ahacop/epubsync --pattern SHA256SUMS --output - 2>/dev/null | cut -d' ' -f1) && [ ${#sha} -eq 64 ] && break
         sleep 20
     done
     [ ${#sha} -eq 64 ] || { echo "no SHA256SUMS on release v$version"; exit 1; }

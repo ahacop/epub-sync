@@ -46,7 +46,7 @@
             pname = "epubsync";
             meta = {
               description = "Manage a KEPUB library and sync it to a Kobo";
-              homepage = "https://github.com/ahacop/epub-sync";
+              homepage = "https://github.com/ahacop/epubsync";
               license = pkgs.lib.licenses.gpl3Plus;
               mainProgram = "epubsync";
             };
@@ -56,7 +56,7 @@
             pname = "epubsync-app";
             meta = {
               description = "View an EpubSync library in a window";
-              homepage = "https://github.com/ahacop/epub-sync";
+              homepage = "https://github.com/ahacop/epubsync";
               license = pkgs.lib.licenses.gpl3Plus;
               mainProgram = "epubsync-app";
             };

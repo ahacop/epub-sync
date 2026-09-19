@@ -11,4 +11,4 @@ members = [
 version = "0.1.8"
 edition = "2024"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/ahacop/epub-sync"
+repository = "https://github.com/ahacop/epubsync"

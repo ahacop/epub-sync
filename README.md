@@ -10,7 +10,7 @@ metadata from the internet.
 With Nix:
 
 ```sh
-nix run github:ahacop/epub-sync -- --help
+nix run github:ahacop/epubsync -- --help
 ```
 
 With Homebrew:
@@ -56,7 +56,7 @@ publisher, description, reading progress per device, and file path. It is
 read-only. The CLI stays the way to import, edit, remove, and sync.
 
 ```sh
-nix run github:ahacop/epub-sync#app   # or, after brew install: epubsync-app
+nix run github:ahacop/epubsync#app   # or, after brew install: epubsync-app
 ```
 
 The viewer holds the library while its window is open, so a CLI command
