@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use epubsync_core::library::{Book, ProgressRow, book_file_name};
+use epubsync_core::library::{Book, Field, ProgressRow, book_file_name};
 use epubsync_core::metadata::format_series_number;
 use iced::widget::{
     button, column, container, markdown, progress_bar, row, scrollable, space, text,
@@ -83,22 +83,20 @@ fn body<'a>(
     }
 
     let mut meta = column![].spacing(6);
-    if let Some(publisher) = &m.publisher {
-        meta = meta.push(field("Publisher", text(publisher).size(12.5)));
-    }
-    if let Some(series) = &m.series {
-        let value = match series.number {
-            Some(n) => format!("{}, book {}", series.name, format_series_number(n)),
-            None => series.name.clone(),
+    for f in book.fields() {
+        let (label, value) = match f {
+            Field::Publisher(p) => ("Publisher", p.to_string()),
+            Field::Series(s) => match s.number {
+                Some(n) => (
+                    "Series",
+                    format!("{}, book {}", s.name, format_series_number(n)),
+                ),
+                None => ("Series", s.name.clone()),
+            },
+            Field::WordCount(w) => ("Length", format!("{} words", format::thousands(w))),
+            Field::ReadingEase(e) => ("Ease", format::reading_ease(e)),
         };
-        meta = meta.push(field("Series", text(value).size(12.5)));
-    }
-    if let Some(words) = book.stats.word_count {
-        let value = format!("{} words", format::thousands(words));
-        meta = meta.push(field("Length", text(value).size(12.5)));
-    }
-    if let Some(score) = book.stats.reading_ease {
-        meta = meta.push(field("Ease", text(format::reading_ease(score)).size(12.5)));
+        meta = meta.push(field(label, text(value).size(12.5)));
     }
     meta = meta.push(field(
         "File",
